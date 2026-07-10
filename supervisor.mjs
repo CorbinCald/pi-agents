@@ -16,7 +16,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { appendFile, mkdir, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import net from "node:net";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -34,11 +34,8 @@ const RECAP_MODEL = "openai/gpt-5.6-luna";
 const RECAP_THINKING = "medium";
 const MAX_RECAP_INPUT_CHARS = 48_000;
 const MAX_EVENT_TEXT_CHARS = 24_000;
-const REQUEST_TIMEOUT_MS = 120_000;
 const RECAP_TIMEOUT_MS = 180_000;
 const IDLE_WORKER_TTL_MS = 60 * 60 * 1_000;
-const DEFAULT_BACKEND =
-	process.env.PI_AGENTS_BACKEND === "rpc" ? "rpc" : "terminal";
 const TMUX_SERVER = `pi-agents-${createHash("sha1").update(ROOT).digest("hex").slice(0, 12)}`;
 const TMUX_CONFIG_PATH = join(ROOT, "tmux.conf");
 
@@ -100,11 +97,10 @@ function acquireLock() {
 acquireLock();
 
 const jobs = new Map();
-const workers = new Map();
 const terminalRunning = new Set();
+const terminalWorkerPids = new Map();
 const clients = new Set();
 const generations = new Map();
-const streamBroadcastTimes = new Map();
 let gitQueue = Promise.resolve();
 let shuttingDown = false;
 
@@ -123,10 +119,7 @@ function publicJob(job) {
 	} = job;
 	return {
 		...state,
-		isRunning:
-			job.backend === "terminal"
-				? terminalRunning.has(job.id)
-				: workers.has(job.id),
+		isRunning: terminalRunning.has(job.id),
 		isStreaming: Boolean(job.isStreaming),
 	};
 }
@@ -166,12 +159,11 @@ function loadJobs() {
 				readFileSync(join(JOBS_DIR, name.name, "state.json"), "utf8"),
 			);
 			if (!parsed || typeof parsed.id !== "string") continue;
-			parsed.backend ||= "rpc";
+			parsed.backend = "terminal";
+			parsed.terminalServer = TMUX_SERVER;
+			parsed.terminalSession ||= `pi-agent-${parsed.id}`;
+			delete parsed.pendingUi;
 			delete parsed.terminalStopping;
-			if (parsed.backend === "terminal") {
-				parsed.terminalServer ||= TMUX_SERVER;
-				parsed.terminalSession ||= `pi-agent-${parsed.id}`;
-			}
 			parsed.isRunning = false;
 			parsed.isStreaming = false;
 			if (parsed.status === "working") {
@@ -214,23 +206,6 @@ function textContent(content) {
 		.join("\n");
 }
 
-function safeMessage(message) {
-	if (!message || typeof message !== "object") return message;
-	if (!Array.isArray(message.content)) return message;
-	return {
-		...message,
-		content: message.content.map((part) => {
-			if (part?.type === "image") return { type: "text", text: "[image]" };
-			if (part?.type === "thinking")
-				return {
-					type: "thinking",
-					thinking: compactText(part.thinking, 2_000),
-				};
-			return part;
-		}),
-	};
-}
-
 function formatToolActivity(name, args = {}) {
 	switch (name) {
 		case "read":
@@ -266,31 +241,6 @@ function execFileAsync(command, args, options = {}) {
 				resolvePromise({ stdout, stderr });
 			},
 		);
-	});
-}
-
-function spawnWithInput(command, args, input, options = {}) {
-	return new Promise((resolvePromise, reject) => {
-		const child = spawn(command, args, {
-			...options,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		let stdout = "";
-		let stderr = "";
-		child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
-		child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
-		child.once("error", reject);
-		child.once("close", (code) => {
-			if (code === 0) resolvePromise({ stdout, stderr });
-			else {
-				const error = new Error(
-					compactText(stderr || `${command} exited ${code}`, 1_000),
-				);
-				error.code = code;
-				reject(error);
-			}
-		});
-		child.stdin.end(input);
 	});
 }
 
@@ -334,6 +284,50 @@ async function hasTerminalSession(job) {
 	} catch {
 		return false;
 	}
+}
+
+async function assertTerminalWorker(job, workerPid) {
+	// Workers started before process authentication was added do not send a PID.
+	// Keep those sessions compatible until a newly loaded worker authenticates.
+	if (workerPid === undefined) {
+		if (terminalWorkerPids.has(job.id)) {
+			throw new Error(`Worker PID is required for ${job.id}`);
+		}
+		return;
+	}
+	if (!Number.isSafeInteger(workerPid) || workerPid <= 0) {
+		throw new Error("Worker PID is invalid");
+	}
+
+	const authenticatedPid = terminalWorkerPids.get(job.id);
+	if (authenticatedPid === workerPid) return;
+	if (authenticatedPid !== undefined) {
+		throw new Error(
+			`Worker PID ${workerPid} is not the managed Pi process for ${job.id}`,
+		);
+	}
+
+	let panePid;
+	try {
+		const result = await execFileAsync("tmux", [
+			"-L",
+			TMUX_SERVER,
+			"display-message",
+			"-p",
+			"-t",
+			job.terminalSession,
+			"#{pane_pid}",
+		]);
+		panePid = Number(result.stdout.trim());
+	} catch {
+		throw new Error(`Managed Pi process for ${job.id} is unavailable`);
+	}
+	if (panePid !== workerPid) {
+		throw new Error(
+			`Worker PID ${workerPid} is not the managed Pi process for ${job.id}`,
+		);
+	}
+	terminalWorkerPids.set(job.id, workerPid);
 }
 
 function terminalLaunchCommand(job, initialPrompt) {
@@ -391,6 +385,7 @@ async function ensureTerminal(job, initialPrompt) {
 		terminalRunning.add(job.id);
 		return false;
 	}
+	terminalWorkerPids.delete(job.id);
 	await execFileAsync(
 		"tmux",
 		tmuxCommand(
@@ -427,37 +422,11 @@ async function stopTerminal(job) {
 		// The session already exited.
 	}
 	terminalRunning.delete(job.id);
+	terminalWorkerPids.delete(job.id);
 	setTimeout(() => {
 		delete job.terminalStopping;
 		if (jobs.has(job.id)) persistJob(job);
 	}, 1_000).unref();
-}
-
-async function sendTerminalInput(job, text) {
-	const buffer = `pi-agent-${job.id}-${Date.now()}`;
-	await spawnWithInput(
-		"tmux",
-		["-L", TMUX_SERVER, "load-buffer", "-b", buffer, "-"],
-		text,
-	);
-	await execFileAsync("tmux", [
-		"-L",
-		TMUX_SERVER,
-		"paste-buffer",
-		"-d",
-		"-b",
-		buffer,
-		"-t",
-		job.terminalSession,
-	]);
-	await execFileAsync("tmux", [
-		"-L",
-		TMUX_SERVER,
-		"send-keys",
-		"-t",
-		job.terminalSession,
-		"Enter",
-	]);
 }
 
 function withGitQueue(fn) {
@@ -585,341 +554,14 @@ async function removeWorktree(job) {
 	});
 }
 
-class RpcWorker {
-	constructor(job, onEvent, onExit) {
-		this.job = job;
-		this.onEvent = onEvent;
-		this.onExit = onExit;
-		this.decoder = new StringDecoder("utf8");
-		this.buffer = "";
-		this.pending = new Map();
-		this.nextId = 1;
-		this.closed = false;
-		this.intentional = false;
-		this.stderr = "";
-	}
-
-	start() {
-		const args = ["--mode", "rpc"];
-		if (this.job.sessionFile && existsSync(this.job.sessionFile)) {
-			args.push("--session", this.job.sessionFile);
-		} else {
-			args.push("--session-dir", SESSIONS_DIR);
-		}
-		args.push("--model", `${this.job.model.provider}/${this.job.model.id}`);
-		args.push("--thinking", this.job.thinkingLevel);
-		args.push("--name", this.job.name);
-		if (this.job.projectTrusted) args.push("--approve");
-
-		this.proc = spawn(
-			piInvocation.command,
-			[...piInvocation.argsPrefix, ...args],
-			{
-				cwd: this.job.cwd,
-				detached: process.platform !== "win32",
-				stdio: ["pipe", "pipe", "pipe"],
-				env: {
-					...process.env,
-					PI_AGENTS_WORKER: "1",
-					PI_AGENT_JOB_ID: this.job.id,
-					PI_AGENT_JOB_DIR: join(JOBS_DIR, this.job.id),
-				},
-			},
-		);
-
-		this.proc.stdout.on("data", (chunk) => this.readChunk(chunk));
-		this.proc.stderr.on("data", (chunk) => {
-			const text = chunk.toString();
-			this.stderr = `${this.stderr}${text}`.slice(-32_000);
-			void appendFile(join(JOBS_DIR, this.job.id, "worker.log"), text).catch(
-				() => undefined,
-			);
-		});
-		this.proc.on("error", (error) => this.finish(error));
-		this.proc.on("close", (code, signal) =>
-			this.finish(undefined, code, signal),
-		);
-	}
-
-	readChunk(chunk) {
-		this.buffer += this.decoder.write(chunk);
-		while (true) {
-			const newline = this.buffer.indexOf("\n");
-			if (newline < 0) break;
-			let line = this.buffer.slice(0, newline);
-			this.buffer = this.buffer.slice(newline + 1);
-			if (line.endsWith("\r")) line = line.slice(0, -1);
-			if (!line) continue;
-			try {
-				this.handle(JSON.parse(line));
-			} catch {
-				void appendFile(
-					join(JOBS_DIR, this.job.id, "worker.log"),
-					`[non-json stdout] ${line}\n`,
-				).catch(() => undefined);
-			}
-		}
-	}
-
-	handle(message) {
-		if (message?.type === "response" && typeof message.id === "string") {
-			const pending = this.pending.get(message.id);
-			if (!pending) return;
-			this.pending.delete(message.id);
-			clearTimeout(pending.timer);
-			if (message.success) pending.resolve(message.data);
-			else
-				pending.reject(
-					new Error(
-						message.error || `Worker command failed: ${message.command}`,
-					),
-				);
-			return;
-		}
-		this.onEvent(message);
-	}
-
-	request(type, payload = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
-		if (this.closed || !this.proc?.stdin.writable)
-			return Promise.reject(new Error("Agent worker is not running"));
-		const id = `s-${this.nextId++}`;
-		return new Promise((resolvePromise, reject) => {
-			const timer = setTimeout(() => {
-				this.pending.delete(id);
-				reject(new Error(`Agent worker request timed out: ${type}`));
-			}, timeoutMs);
-			this.pending.set(id, { resolve: resolvePromise, reject, timer });
-			this.proc.stdin.write(
-				`${JSON.stringify({ id, type, ...payload })}\n`,
-				(error) => {
-					if (!error) return;
-					const pending = this.pending.get(id);
-					if (!pending) return;
-					this.pending.delete(id);
-					clearTimeout(pending.timer);
-					reject(error);
-				},
-			);
-		});
-	}
-
-	sendRaw(value) {
-		if (this.closed || !this.proc?.stdin.writable)
-			throw new Error("Agent worker is not running");
-		this.proc.stdin.write(`${JSON.stringify(value)}\n`);
-	}
-
-	stop() {
-		this.intentional = true;
-		if (!this.proc || this.closed) return;
-		try {
-			if (process.platform !== "win32" && this.proc.pid)
-				process.kill(-this.proc.pid, "SIGTERM");
-			else this.proc.kill("SIGTERM");
-		} catch {
-			// The process already exited.
-		}
-		setTimeout(() => {
-			if (this.closed || !this.proc) return;
-			try {
-				if (process.platform !== "win32" && this.proc.pid)
-					process.kill(-this.proc.pid, "SIGKILL");
-				else this.proc.kill("SIGKILL");
-			} catch {
-				// The process already exited.
-			}
-		}, 3_000).unref();
-	}
-
-	finish(error, code, signal) {
-		if (this.closed) return;
-		this.closed = true;
-		for (const pending of this.pending.values()) {
-			clearTimeout(pending.timer);
-			pending.reject(
-				error ||
-					new Error(`Agent worker exited (${signal || code || "unknown"})`),
-			);
-		}
-		this.pending.clear();
-		this.onExit({
-			error,
-			code,
-			signal,
-			intentional: this.intentional,
-			stderr: this.stderr,
-		});
-	}
-}
-
-async function ensureWorker(job) {
-	const existing = workers.get(job.id);
-	if (existing && !existing.closed) return existing;
-
-	// An extension UI request belongs to the old RPC process and cannot be
-	// answered after that process exits. Preserve the question, but route the
-	// user's eventual answer as a normal resumed-session prompt.
-	job.pendingUi = undefined;
-	const worker = new RpcWorker(
-		job,
-		(event) => handleWorkerEvent(job, event),
-		(info) => handleWorkerExit(job, worker, info),
-	);
-	workers.set(job.id, worker);
-	worker.start();
-
-	try {
-		const state = await worker.request("get_state", {}, 30_000);
-		if (state?.sessionFile) job.sessionFile = state.sessionFile;
-		if (state?.sessionId) job.sessionId = state.sessionId;
-		job.isStreaming = Boolean(state?.isStreaming);
-		persistJob(job);
-		return worker;
-	} catch (error) {
-		worker.stop();
-		throw error;
-	}
-}
-
-function broadcastWorkerEvent(job, event) {
-	const now = Date.now();
-	const lastStreamingBroadcast = streamBroadcastTimes.get(job.id) || 0;
-	if (event.type === "message_update" && now - lastStreamingBroadcast < 75)
-		return;
-	if (event.type === "message_update") streamBroadcastTimes.set(job.id, now);
-	let data = event;
-	if (event.type === "message_update") {
-		data = {
-			type: event.type,
-			assistantMessageEvent: event.assistantMessageEvent,
-		};
-	} else if (event.type === "message_end") {
-		data = { type: event.type, message: safeMessage(event.message) };
-	} else if (event.type === "tool_execution_update") {
-		data = {
-			type: event.type,
-			toolCallId: event.toolCallId,
-			toolName: event.toolName,
-		};
-	}
-	broadcast({ type: "event", event: "job_event", jobId: job.id, data });
-}
-
-function handleWorkerEvent(job, event) {
-	broadcastWorkerEvent(job, event);
-
-	switch (event.type) {
-		case "agent_start":
-			nextGeneration(job.id);
-			job.status = "working";
-			job.stopped = false;
-			job.failed = false;
-			job.error = undefined;
-			job.recap = undefined;
-			job.recapPending = false;
-			job.waitingFor = undefined;
-			job.pendingUi = undefined;
-			job.isStreaming = true;
-			job.summary = "Starting…";
-			emitState(job);
-			break;
-		case "message_update": {
-			const delta = event.assistantMessageEvent?.delta;
-			if (
-				event.assistantMessageEvent?.type === "text_delta" &&
-				typeof delta === "string"
-			) {
-				job.streamingText = `${job.streamingText || ""}${delta}`.slice(-8_000);
-				const latest = job.streamingText.split("\n").filter(Boolean).at(-1);
-				if (latest) job.summary = compactText(latest, 96);
-				const now = Date.now();
-				if (!job.lastStreamPersistAt || now - job.lastStreamPersistAt > 750) {
-					job.lastStreamPersistAt = now;
-					emitState(job);
-				}
-			}
-			break;
-		}
-		case "message_end": {
-			const message = event.message;
-			if (message?.role === "assistant") {
-				const text = textContent(message.content);
-				if (text) {
-					job.lastAssistantText = text.slice(-16_000);
-					job.summary = compactText(
-						text.split("\n").filter(Boolean).at(-1) || text,
-						96,
-					);
-				}
-				job.streamingText = "";
-				if (message.stopReason === "error") {
-					job.failed = true;
-					job.error = message.errorMessage || "The model returned an error";
-				}
-			}
-			emitState(job);
-			break;
-		}
-		case "tool_execution_start":
-			job.summary = formatToolActivity(event.toolName, event.args);
-			emitState(job);
-			break;
-		case "extension_ui_request": {
-			if (!["select", "confirm", "input", "editor"].includes(event.method))
-				break;
-			job.pendingUi = {
-				id: event.id,
-				method: event.method,
-				title: event.title,
-				message: event.message,
-				placeholder: event.placeholder,
-				prefill: event.prefill,
-				options: event.options,
-			};
-			job.waitingFor = event.message || event.title || "Input needed";
-			job.summary = compactText(job.waitingFor, 96);
-			job.status = "needs_input";
-			job.isStreaming = false;
-			emitState(job);
-			break;
-		}
-		case "auto_retry_start":
-			job.status = "working";
-			job.summary = `Retrying after an API error (attempt ${event.attempt})`;
-			emitState(job);
-			break;
-		case "agent_settled":
-			job.isStreaming = false;
-			if (!job.pendingUi) void createCompletionRecap(job);
-			break;
-		case "extension_error":
-			job.summary = compactText(event.error || "Extension error", 96);
-			emitState(job);
-			break;
-	}
-}
-
-function handleWorkerExit(job, worker, info) {
-	if (workers.get(job.id) !== worker) return;
-	workers.delete(job.id);
-	job.isStreaming = false;
-	if (shuttingDown || info.intentional) {
-		persistJob(job);
-		broadcast({ type: "event", event: "state", job: publicJob(job) });
-		return;
-	}
-
-	job.status = "complete";
-	job.failed = true;
-	job.error = compactText(
-		info.stderr ||
-			info.error?.message ||
-			`Worker exited (${info.signal || info.code})`,
-		500,
-	);
-	job.summary = compactText(job.error, 96);
-	job.completedAt = Date.now();
-	emitState(job);
+function resetTerminalCompletionState(job) {
+	job.stopped = false;
+	job.failed = false;
+	job.error = undefined;
+	job.recap = undefined;
+	job.recapPending = false;
+	job.completedAt = undefined;
+	job.waitingFor = undefined;
 }
 
 function handleTerminalWorkerEvent(job, eventType, data = {}) {
@@ -948,14 +590,8 @@ function handleTerminalWorkerEvent(job, eventType, data = {}) {
 			break;
 		case "agent_start":
 			nextGeneration(job.id);
+			resetTerminalCompletionState(job);
 			job.status = "working";
-			job.stopped = false;
-			job.failed = false;
-			job.error = undefined;
-			job.recap = undefined;
-			job.recapPending = false;
-			job.waitingFor = undefined;
-			job.pendingUi = undefined;
 			job.isStreaming = true;
 			job.summary = "Working…";
 			emitState(job);
@@ -978,11 +614,18 @@ function handleTerminalWorkerEvent(job, eventType, data = {}) {
 			break;
 		case "tool_execution_start":
 			if (typeof data.toolName === "string") {
+				if (job.status !== "working" || job.stopped || !job.isStreaming) {
+					nextGeneration(job.id);
+				}
+				resetTerminalCompletionState(job);
 				job.summary = formatToolActivity(data.toolName, data.args);
 				if (/ask|question|confirm|input/i.test(data.toolName)) {
 					job.status = "needs_input";
 					job.waitingFor = "The session is waiting for input";
 					job.isStreaming = false;
+				} else {
+					job.status = "working";
+					job.isStreaming = true;
 				}
 				emitState(job);
 			}
@@ -1017,6 +660,7 @@ function handleTerminalWorkerEvent(job, eventType, data = {}) {
 		case "session_shutdown":
 			nextGeneration(job.id);
 			terminalRunning.delete(job.id);
+			terminalWorkerPids.delete(job.id);
 			if (job.terminalStopping) {
 				persistJob(job);
 				broadcast({ type: "event", event: "state", job: publicJob(job) });
@@ -1193,18 +837,7 @@ async function createCompletionRecap(job) {
 	job.completedAt = Date.now();
 	emitState(job);
 
-	let messages = [];
-	try {
-		const worker = workers.get(job.id);
-		if (worker && !worker.closed) {
-			const result = await worker.request("get_messages");
-			messages = result?.messages || [];
-		} else if (job.sessionFile) {
-			messages = readSessionMessages(job.sessionFile);
-		}
-	} catch (error) {
-		log(`Could not read messages for recap ${job.id}`, error);
-	}
+	const messages = job.sessionFile ? readSessionMessages(job.sessionFile) : [];
 
 	let result;
 	try {
@@ -1237,14 +870,6 @@ async function createCompletionRecap(job) {
 	job.recap = result.status === "complete" ? result.recap : undefined;
 	if (!job.userRenamed && result.title && result.title !== job.name) {
 		job.name = result.title;
-		const worker = workers.get(job.id);
-		if (worker && !worker.closed) {
-			void worker
-				.request("set_session_name", { name: job.name })
-				.catch((error) =>
-					log(`Could not update generated session name for ${job.id}`, error),
-				);
-		}
 	}
 	emitState(job);
 }
@@ -1309,13 +934,9 @@ async function dispatchJob(request) {
 	const now = Date.now();
 	const job = {
 		id,
-		backend: DEFAULT_BACKEND,
-		...(DEFAULT_BACKEND === "terminal"
-			? {
-					terminalServer: TMUX_SERVER,
-					terminalSession: `pi-agent-${id}`,
-				}
-			: {}),
+		backend: "terminal",
+		terminalServer: TMUX_SERVER,
+		terminalSession: `pi-agent-${id}`,
 		name: autoName(request.prompt),
 		prompt: request.prompt.trim(),
 		originalCwd,
@@ -1342,20 +963,12 @@ async function dispatchJob(request) {
 	try {
 		await createIsolatedWorktree(job);
 		emitState(job);
-		if (job.backend === "terminal") {
-			await ensureTerminal(job, job.prompt);
-			job.status = "working";
-			job.summary = job.isolated
-				? `Starting native Pi in ${job.branch}`
-				: "Starting native Pi…";
-			emitState(job);
-		} else {
-			const worker = await ensureWorker(job);
-			await worker.request("prompt", { message: job.prompt });
-			job.status = "working";
-			job.summary = job.isolated ? `Working in ${job.branch}` : "Working…";
-			emitState(job);
-		}
+		await ensureTerminal(job, job.prompt);
+		job.status = "working";
+		job.summary = job.isolated
+			? `Starting native Pi in ${job.branch}`
+			: "Starting native Pi…";
+		emitState(job);
 	} catch (error) {
 		job.status = "complete";
 		job.failed = true;
@@ -1367,103 +980,9 @@ async function dispatchJob(request) {
 	return publicJob(job);
 }
 
-async function respondToPendingUi(job, worker, message) {
-	const pending = job.pendingUi;
-	if (!pending) return false;
-	let response;
-	if (pending.method === "confirm") {
-		const normalized = message.trim().toLowerCase();
-		response = {
-			type: "extension_ui_response",
-			id: pending.id,
-			confirmed: /^(y|yes|true|allow|ok|1)$/.test(normalized),
-		};
-	} else if (pending.method === "select") {
-		const index = Number.parseInt(message.trim(), 10);
-		const selected =
-			Number.isFinite(index) && index > 0
-				? pending.options?.[index - 1]
-				: pending.options?.find((item) => item === message.trim());
-		response = {
-			type: "extension_ui_response",
-			id: pending.id,
-			value: selected || message.trim(),
-		};
-	} else {
-		response = {
-			type: "extension_ui_response",
-			id: pending.id,
-			value: message,
-		};
-	}
-	worker.sendRaw(response);
-	job.pendingUi = undefined;
-	job.waitingFor = undefined;
-	job.status = "working";
-	job.summary = "Continuing with your answer…";
-	job.isStreaming = true;
-	nextGeneration(job.id);
-	emitState(job);
-	return true;
-}
-
-async function promptJob(job, message) {
-	if (typeof message !== "string" || !message.trim())
-		throw new Error("Message cannot be empty");
-
-	if (job.backend === "terminal") {
-		const launched = await ensureTerminal(job, message.trim());
-		nextGeneration(job.id);
-		job.status = "working";
-		job.stopped = false;
-		job.failed = false;
-		job.error = undefined;
-		job.recap = undefined;
-		job.recapPending = false;
-		job.waitingFor = undefined;
-		job.summary = launched ? "Starting native Pi…" : "Queued your message…";
-		emitState(job);
-		if (!launched) await sendTerminalInput(job, message);
-		return publicJob(job);
-	}
-
-	const worker = await ensureWorker(job);
-	if (await respondToPendingUi(job, worker, message)) return publicJob(job);
-
-	nextGeneration(job.id);
-	job.status = "working";
-	job.stopped = false;
-	job.failed = false;
-	job.error = undefined;
-	job.recap = undefined;
-	job.recapPending = false;
-	job.waitingFor = undefined;
-	job.summary = "Queued your message…";
-	emitState(job);
-	await worker.request("prompt", {
-		message,
-		...(job.isStreaming ? { streamingBehavior: "steer" } : {}),
-	});
-	return publicJob(job);
-}
-
 async function stopJob(job) {
 	nextGeneration(job.id);
-	if (job.backend === "terminal") {
-		await stopTerminal(job);
-	} else {
-		const worker = workers.get(job.id);
-		if (worker) {
-			worker.intentional = true;
-			try {
-				await worker.request("abort", {}, 5_000);
-			} catch {
-				// Fall back to terminating the process.
-			}
-			worker.stop();
-			workers.delete(job.id);
-		}
-	}
+	await stopTerminal(job);
 	job.status = "complete";
 	job.stopped = true;
 	job.isStreaming = false;
@@ -1479,7 +998,6 @@ async function removeJob(job) {
 	await removeWorktree(job);
 	jobs.delete(job.id);
 	generations.delete(job.id);
-	streamBroadcastTimes.delete(job.id);
 	await rm(join(JOBS_DIR, job.id), { recursive: true, force: true });
 	broadcast({ type: "event", event: "removed", jobId: job.id });
 }
@@ -1492,11 +1010,6 @@ async function handleRequest(message) {
 			return dispatchJob(message);
 		case "prepare_attach": {
 			const job = requiredJob(message.jobId);
-			if (job.backend !== "terminal") {
-				throw new Error(
-					"This legacy RPC session cannot be attached natively; create a new agent session",
-				);
-			}
 			const running = await hasTerminalSession(job);
 			const continuation =
 				!running && job.status === "working"
@@ -1508,47 +1021,12 @@ async function handleRequest(message) {
 		}
 		case "worker_event": {
 			const job = requiredJob(message.jobId);
-			if (job.backend !== "terminal") {
-				throw new Error("Worker events are only valid for terminal sessions");
-			}
+			await assertTerminalWorker(job, message.workerPid);
 			return handleTerminalWorkerEvent(
 				job,
 				String(message.eventType || ""),
 				message.data && typeof message.data === "object" ? message.data : {},
 			);
-		}
-		case "prompt": {
-			const job = requiredJob(message.jobId);
-			return promptJob(job, message.message);
-		}
-		case "abort": {
-			const job = requiredJob(message.jobId);
-			if (job.backend === "terminal" && job.terminalSession) {
-				await execFileAsync("tmux", [
-					"-L",
-					TMUX_SERVER,
-					"send-keys",
-					"-t",
-					job.terminalSession,
-					"Escape",
-				]);
-			} else {
-				const worker = workers.get(job.id);
-				if (worker) await worker.request("abort");
-			}
-			return publicJob(job);
-		}
-		case "messages": {
-			const job = requiredJob(message.jobId);
-			if (job.backend !== "terminal") {
-				const worker = workers.get(job.id);
-				if (worker && !worker.closed) {
-					return (await worker.request("get_messages")) || { messages: [] };
-				}
-			}
-			return {
-				messages: job.sessionFile ? readSessionMessages(job.sessionFile) : [],
-			};
 		}
 		case "rename": {
 			const job = requiredJob(message.jobId);
@@ -1556,12 +1034,6 @@ async function handleRequest(message) {
 			if (!name) throw new Error("Name cannot be empty");
 			job.name = name;
 			job.userRenamed = true;
-			if (job.backend !== "terminal") {
-				const worker = workers.get(job.id);
-				if (worker && !worker.closed) {
-					await worker.request("set_session_name", { name });
-				}
-			}
 			emitState(job);
 			return publicJob(job);
 		}
@@ -1683,6 +1155,7 @@ const terminalPollTimer = setInterval(() => {
 		}
 		void hasTerminalSession(job).then((running) => {
 			if (running || !terminalRunning.delete(jobId)) return;
+			terminalWorkerPids.delete(jobId);
 			job.isStreaming = false;
 			if (job.status === "working" || job.status === "needs_input") {
 				job.status = "complete";
@@ -1706,48 +1179,29 @@ const idleWorkerTimer = setInterval(() => {
 			job.completedAt > cutoff
 		)
 			continue;
-		if (job.backend === "terminal") {
-			if (!terminalRunning.has(job.id)) continue;
-			void stopTerminal(job).then(() => {
-				persistJob(job);
-				broadcast({ type: "event", event: "state", job: publicJob(job) });
-			});
-		} else {
-			const worker = workers.get(job.id);
-			if (!worker) continue;
-			workers.delete(job.id);
-			worker.stop();
+		if (!terminalRunning.has(job.id)) continue;
+		void stopTerminal(job).then(() => {
 			persistJob(job);
 			broadcast({ type: "event", event: "state", job: publicJob(job) });
-		}
+		});
 	}
 }, 60_000);
 
 async function restoreInterruptedJobs() {
 	for (const job of jobs.values()) {
 		try {
-			if (job.backend === "terminal") {
-				if (await hasTerminalSession(job)) {
-					terminalRunning.add(job.id);
-					broadcast({ type: "event", event: "state", job: publicJob(job) });
-					continue;
-				}
-				if (job.status !== "working") continue;
-				job.summary = "Resuming after supervisor restart…";
-				emitState(job);
-				await ensureTerminal(
-					job,
-					`Continue the interrupted task from where you left off. Original task: ${job.prompt}`,
-				);
+			if (await hasTerminalSession(job)) {
+				terminalRunning.add(job.id);
+				broadcast({ type: "event", event: "state", job: publicJob(job) });
 				continue;
 			}
 			if (job.status !== "working") continue;
-			const worker = await ensureWorker(job);
 			job.summary = "Resuming after supervisor restart…";
 			emitState(job);
-			await worker.request("prompt", {
-				message: "Continue the interrupted task from where you left off.",
-			});
+			await ensureTerminal(
+				job,
+				`Continue the interrupted task from where you left off. Original task: ${job.prompt}`,
+			);
 		} catch (error) {
 			job.status = "complete";
 			job.failed = true;
@@ -1763,8 +1217,6 @@ function shutdown(code = 0) {
 	shuttingDown = true;
 	clearInterval(idleWorkerTimer);
 	clearInterval(terminalPollTimer);
-	for (const worker of workers.values()) worker.stop();
-	workers.clear();
 	for (const socket of clients) socket.destroy();
 	clients.clear();
 	server.close(() => process.exit(code));

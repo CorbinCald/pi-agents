@@ -6,12 +6,7 @@ import { basename, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type {
-	AgentRecord,
-	DispatchRequest,
-	MessageList,
-	SupervisorEvent,
-} from "./types.ts";
+import type { AgentRecord, DispatchRequest, SupervisorEvent } from "./types.ts";
 
 const ROOT = join(getAgentDir(), "agents");
 const SOCKET_PATH = join(ROOT, "supervisor.sock");
@@ -277,19 +272,12 @@ export class SupervisorClient {
 		eventType: string,
 		data: Record<string, unknown> = {},
 	): Promise<AgentRecord> {
-		return this.request("worker_event", { jobId, eventType, data });
-	}
-
-	prompt(jobId: string, message: string): Promise<AgentRecord> {
-		return this.request("prompt", { jobId, message });
-	}
-
-	abort(jobId: string): Promise<AgentRecord> {
-		return this.request("abort", { jobId });
-	}
-
-	messages(jobId: string): Promise<MessageList> {
-		return this.request("messages", { jobId });
+		return this.request("worker_event", {
+			jobId,
+			workerPid: process.pid,
+			eventType,
+			data,
+		});
 	}
 
 	rename(jobId: string, name: string): Promise<AgentRecord> {

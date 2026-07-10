@@ -15,15 +15,9 @@ import {
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
-	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { SupervisorClient } from "./client.ts";
-import type {
-	AgentMessageRecord,
-	AgentRecord,
-	AgentStatus,
-	SupervisorEvent,
-} from "./types.ts";
+import type { AgentRecord, AgentStatus, SupervisorEvent } from "./types.ts";
 
 const STATUS_ORDER: AgentStatus[] = ["needs_input", "working", "complete"];
 const STATUS_LABELS: Record<AgentStatus, string> = {
@@ -38,7 +32,7 @@ const EMPTY_LABELS: Record<AgentStatus, string> = {
 };
 const SPINNER = ["✶", "✳", "✢", "✳"];
 
-type ViewMode = "list" | "peek" | "help" | "rename";
+type ViewMode = "list" | "help" | "rename";
 
 export type AgentViewResult =
 	| { type: "close" }
@@ -66,18 +60,6 @@ function formatAge(timestamp: number): string {
 	const hours = Math.floor(minutes / 60);
 	if (hours < 24) return `${hours}h`;
 	return `${Math.floor(hours / 24)}d`;
-}
-
-function messageText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter(
-			(part): part is { type: "text"; text: string } =>
-				part?.type === "text" && typeof part.text === "string",
-		)
-		.map((part) => part.text)
-		.join("\n");
 }
 
 function shortPath(path: string): string {
@@ -117,7 +99,6 @@ class AgentViewComponent implements Component, Focusable {
 	private readonly timer: ReturnType<typeof setInterval>;
 	private mode: ViewMode = "list";
 	private selectedId?: string;
-	private messages: AgentMessageRecord[] = [];
 	private listScroll = 0;
 	private spinnerFrame = 0;
 	private busy = false;
@@ -147,10 +128,7 @@ class AgentViewComponent implements Component, Focusable {
 			},
 			{ paddingX: 1, autocompleteMaxVisible: 6 },
 		);
-		this.promptEditor.onSubmit = (text) => {
-			if (this.mode === "peek") this.submitPeekReply(text);
-			else this.submitList(text);
-		};
+		this.promptEditor.onSubmit = (text) => this.submitList(text);
 		this.unsubscribe = client.onEvent((event) =>
 			this.handleSupervisorEvent(event),
 		);
@@ -170,8 +148,7 @@ class AgentViewComponent implements Component, Focusable {
 	}
 
 	private updateFocus(): void {
-		this.promptEditor.focused =
-			this._focused && (this.mode === "list" || this.mode === "peek");
+		this.promptEditor.focused = this._focused && this.mode === "list";
 		this.renameInput.focused = this._focused && this.mode === "rename";
 	}
 
@@ -201,9 +178,6 @@ class AgentViewComponent implements Component, Focusable {
 		if (event.event === "state" && event.job) {
 			this.jobs.set(event.job.id, event.job);
 			this.ensureSelection();
-			if (this.mode === "peek" && event.job.id === this.selectedId) {
-				void this.loadMessages(event.job.id);
-			}
 			this.tui.requestRender();
 			return;
 		}
@@ -238,9 +212,6 @@ class AgentViewComponent implements Component, Focusable {
 		);
 		const next = Math.max(0, Math.min(jobs.length - 1, index + direction));
 		this.selectedId = jobs[next]?.id;
-		if (this.mode === "peek" && this.selectedId) {
-			void this.loadMessages(this.selectedId);
-		}
 		this.tui.requestRender();
 	}
 
@@ -272,44 +243,6 @@ class AgentViewComponent implements Component, Focusable {
 	private attachSelected(): void {
 		const job = this.selected();
 		if (job && !this.busy) this.done({ type: "attach", jobId: job.id });
-	}
-
-	private async loadMessages(jobId: string): Promise<void> {
-		try {
-			const result = await this.client.messages(jobId);
-			if (this.mode === "peek" && this.selectedId === jobId) {
-				this.messages = result.messages || [];
-				this.tui.requestRender();
-			}
-		} catch (error) {
-			this.error = error instanceof Error ? error.message : String(error);
-			this.tui.requestRender();
-		}
-	}
-
-	private openPeek(): void {
-		const job = this.selected();
-		if (!job) return;
-		this.messages = [];
-		this.setMode("peek");
-		void this.loadMessages(job.id);
-	}
-
-	private submitPeekReply(rawText: string): void {
-		const job = this.selected();
-		const message = rawText.trim();
-		if (!job) return;
-		if (!message) {
-			this.attachSelected();
-			return;
-		}
-		this.promptEditor.addToHistory(message);
-		this.promptEditor.setText("");
-		this.runAction(async () => {
-			const updated = await this.client.prompt(job.id, message);
-			this.jobs.set(updated.id, updated);
-			await this.loadMessages(job.id);
-		});
 	}
 
 	private beginRename(): void {
@@ -391,8 +324,7 @@ class AgentViewComponent implements Component, Focusable {
 			this.tui.requestRender();
 			return;
 		}
-		if (this.mode === "peek") this.handlePeekInput(data);
-		else this.handleListInput(data);
+		this.handleListInput(data);
 	}
 
 	private handleListInput(data: string): void {
@@ -419,8 +351,6 @@ class AgentViewComponent implements Component, Focusable {
 			this.reorder(1);
 		} else if (inputEmpty && matchesKey(data, "right")) {
 			this.attachSelected();
-		} else if (inputEmpty && matchesKey(data, "space")) {
-			this.openPeek();
 		} else if (inputEmpty && matchesKey(data, "ctrl+t")) {
 			this.togglePin();
 		} else if (inputEmpty && matchesKey(data, "ctrl+r")) {
@@ -453,33 +383,10 @@ class AgentViewComponent implements Component, Focusable {
 		this.tui.requestRender();
 	}
 
-	private handlePeekInput(data: string): void {
-		const inputEmpty = this.promptEditor.getText().length === 0;
-		if (inputEmpty && this.keybindings.matches(data, "tui.select.up")) {
-			this.moveSelection(-1);
-		} else if (
-			inputEmpty &&
-			this.keybindings.matches(data, "tui.select.down")
-		) {
-			this.moveSelection(1);
-		} else if (inputEmpty && matchesKey(data, "right")) {
-			this.attachSelected();
-		} else if (inputEmpty && matchesKey(data, "space")) {
-			this.setMode("list");
-		} else if (this.keybindings.matches(data, "app.interrupt")) {
-			if (!inputEmpty) this.promptEditor.setText("");
-			else this.setMode("list");
-		} else {
-			this.promptEditor.handleInput(data);
-		}
-		this.tui.requestRender();
-	}
-
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
 		if (this.mode === "help") return this.renderHelp(safeWidth);
 		if (this.mode === "rename") return this.renderRename(safeWidth);
-		if (this.mode === "peek") return this.renderPeek(safeWidth);
 		return this.renderList(safeWidth);
 	}
 
@@ -591,7 +498,7 @@ class AgentViewComponent implements Component, Focusable {
 				this.theme.fg("dim", ` ${this.listFooter()}`),
 				this.theme.fg(
 					"dim",
-					" Enter dispatch/open · Space peek · / native commands · ? help",
+					" Enter dispatch/open native Pi · / native commands · ? help",
 				),
 			],
 			width,
@@ -634,88 +541,6 @@ class AgentViewComponent implements Component, Focusable {
 		return "↑↓ select · → attach · Ctrl+T pin · Ctrl+R rename · Ctrl+X stop/delete";
 	}
 
-	private renderPeek(width: number): string[] {
-		const job = this.selected();
-		if (!job) {
-			this.setMode("list");
-			return this.renderList(width);
-		}
-		const editorLines = this.promptEditor.render(width);
-		const lines = [
-			this.borderLine(width),
-			` ${this.statusIcon(job)} ${this.theme.bold(job.name)}  ${this.theme.fg("dim", formatAge(job.updatedAt))}`,
-			this.theme.fg("muted", ` ${STATUS_LABELS[job.status]} · ${job.summary}`),
-			"",
-		];
-		if (job.waitingFor) {
-			lines.push(
-				` ${this.theme.fg("warning", this.theme.bold("Needs input"))}`,
-			);
-			lines.push(
-				...wrapTextWithAnsi(job.waitingFor, Math.max(1, width - 2)).map(
-					(line) => ` ${line}`,
-				),
-			);
-			if (job.pendingUi?.options?.length) {
-				for (const [index, option] of job.pendingUi.options.entries()) {
-					lines.push(`   ${index + 1}. ${option}`);
-				}
-			}
-			lines.push("");
-		}
-		if (job.recapPending) {
-			lines.push(
-				` ${this.theme.fg("muted", "Preparing recap with gpt-5.6-luna (medium)…")}`,
-				"",
-			);
-		} else if (job.recap) {
-			lines.push(` ${this.theme.fg("accent", this.theme.bold("Recap"))}`);
-			lines.push(
-				...wrapTextWithAnsi(job.recap, Math.max(1, width - 2)).map(
-					(line) => ` ${line}`,
-				),
-				"",
-			);
-		}
-		const lastAssistant = [...this.messages]
-			.reverse()
-			.find((message) => message.role === "assistant");
-		const lastText = lastAssistant ? messageText(lastAssistant.content) : "";
-		if (lastText && !job.waitingFor) {
-			lines.push(` ${this.theme.fg("muted", "Recent output")}`);
-			const recent =
-				lastText.length > 2_000 ? `…${lastText.slice(-2_000)}` : lastText;
-			lines.push(
-				...wrapTextWithAnsi(recent, Math.max(1, width - 2)).map(
-					(line) => ` ${line}`,
-				),
-				"",
-			);
-		}
-		lines.push(
-			this.theme.fg("dim", ` cwd: ${shortPath(job.cwd)}`),
-			...(job.branch ? [this.theme.fg("dim", ` branch: ${job.branch}`)] : []),
-		);
-
-		const bodyBudget = Math.max(
-			1,
-			this.targetHeight() - editorLines.length - 1,
-		);
-		const body = lines.slice(Math.max(0, lines.length - bodyBudget));
-		while (body.length < bodyBudget) body.push("");
-		return this.screen(
-			[
-				...body,
-				...editorLines,
-				this.theme.fg(
-					"dim",
-					` ${this.error || "Enter reply/open · ↑↓ adjacent · → attach · Space/Esc close"}`,
-				),
-			],
-			width,
-		);
-	}
-
 	private renderHelp(width: number): string[] {
 		const lines = [
 			this.borderLine(width),
@@ -723,7 +548,6 @@ class AgentViewComponent implements Component, Focusable {
 			"",
 			" ↑ / ↓             Select a session",
 			" Enter / →         Open the selected native Pi session",
-			" Space             Peek and reply",
 			" Alt+1 … Alt+9     Open session 1–9",
 			" Ctrl+T            Pin or unpin",
 			" Ctrl+R            Rename",
@@ -735,7 +559,7 @@ class AgentViewComponent implements Component, Focusable {
 			"",
 			this.theme.fg(
 				"dim",
-				" Attached sessions are native Pi: ← detaches; all Pi keys and commands remain available.",
+				" Attached sessions are native Pi; press ← on an empty prompt or use /agents to detach.",
 			),
 			"",
 			this.theme.fg("dim", " Press ?, Enter, or Esc to close help"),

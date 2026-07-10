@@ -14,9 +14,10 @@ A native Agents workspace for [Pi Coding Agent](https://github.com/earendil-work
 - **Needs Input**, **Working**, and **Complete** session groups
 - Automatic completion classification and concise recaps
 - Isolated Git worktree and branch for each dispatched session
-- Pinning, renaming, reordering, peeking, replying, stopping, and deletion
+- Pinning, renaming, reordering, stopping, and deletion
 - Mouse/trackpad scrollback with a 100,000-line history
-- Global `/agents` command and empty-prompt `Left Arrow` navigation
+- Source directory and isolated worktree shown inside each native Pi session
+- Empty-prompt **Left Arrow** or `/agents` to open the workspace and detach back to it
 
 ## Requirements
 
@@ -51,13 +52,13 @@ pi remove git:github.com/CorbinCald/pi-agents
 
 ## Use
 
-- Press **Left Arrow** while Pi's normal editor is empty, or run `/agents`.
+- Press **Left Arrow** on an empty native Pi prompt, or run `/agents`, to open the workspace.
 - Type a task and press **Enter** to dispatch it.
-- Select a session and press **Enter** or **Right Arrow** to attach.
-- Press **Left Arrow** on an empty attached prompt to detach without interrupting the session.
+- Select a session and press **Enter** or **Right Arrow** to hand the terminal directly to its native Pi session.
+- Press **Left Arrow** on an empty attached prompt, or run `/agents`, to detach without interrupting it.
 - Use the **mouse wheel or trackpad** to scroll through an attached conversation. Scroll back to the bottom, or press `q`, to return to the live view.
 
-Attached sessions are actual interactive Pi processes, not transcript emulations. Native slash commands, model controls, bash mode, external editor support, custom extensions, and configured keybindings remain available. `Ctrl+Z` in a managed session backgrounds it by detaching to the Agents workspace.
+Each agent is one persistent interactive Pi process, not a transcript emulation or parallel session UI. On attach, the host UI stops and the terminal is handed directly to that Pi process. Native slash commands, `/new`, `/resume`, model controls, bash mode, external editor support, custom extensions, configured keybindings, and normal Pi shortcuts remain available; Agents only claims Left Arrow when the editor is empty.
 
 Typing `/` in an empty Agents workspace returns immediately to Pi's native slash-command editor. `Shift+Tab` in the workspace changes the reasoning effort used for newly dispatched sessions.
 
@@ -69,7 +70,6 @@ Press `?` in the workspace to show the current controls.
 | --- | --- |
 | `Up` / `Down` | Select a session |
 | `Enter` / `Right` | Open the selected native Pi session |
-| `Space` | Peek at a session and optionally reply |
 | `Alt+1` … `Alt+9` | Open session 1–9 |
 | `Ctrl+T` | Pin or unpin |
 | `Ctrl+R` | Rename |
@@ -125,7 +125,7 @@ npm test
 npm run lint
 ```
 
-The integration suite uses fake Pi workers and temporary Git repositories. It covers concurrent worktree isolation, state classification, recaps, follow-up prompts, client disconnection, persistent native tmux workers, scrollback configuration, and cleanup.
+The integration suite uses fake native Pi processes and temporary Git repositories. It covers concurrent worktree isolation, state classification, recaps, direct terminal follow-ups, client disconnection, persistent native tmux sessions, attach preparation, scrollback configuration, and cleanup.
 
 To try a checkout without installing it permanently:
 

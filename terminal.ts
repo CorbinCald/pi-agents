@@ -54,6 +54,7 @@ export async function attachAgentTerminal(
 	);
 	await tui.terminal.drainInput(100);
 	tui.stop();
+	tui.terminal.clearScreen();
 	try {
 		await new Promise<void>((resolve, reject) => {
 			const child = spawn(
@@ -70,6 +71,7 @@ export async function attachAgentTerminal(
 			child.once("close", () => resolve());
 		});
 	} finally {
+		tui.terminal.clearScreen();
 		tui.start();
 		tui.requestRender(true);
 	}

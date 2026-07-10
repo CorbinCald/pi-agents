@@ -12,6 +12,7 @@ import type { AgentRecord, SupervisorEvent } from "./types.ts";
 
 const JOB_ID = process.env.PI_AGENT_JOB_ID;
 const TMUX_SERVER = process.env.PI_AGENTS_TMUX_SERVER;
+const CONTEXT_WIDGET = "agents-context";
 const RECAP_WIDGET = "agents-recap";
 const STATUS_KEY = "agents-worker";
 
@@ -25,6 +26,23 @@ function messageText(content: unknown): string {
 		)
 		.map((part) => part.text)
 		.join("\n");
+}
+
+function shortPath(path: string): string {
+	const home = process.env.HOME;
+	return home && path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+}
+
+function contextComponent(job: AgentRecord) {
+	return (_tui: unknown, theme: ExtensionContext["ui"]["theme"]) =>
+		new Text(
+			[
+				`${theme.fg("dim", "directory:")} ${shortPath(job.originalCwd)}`,
+				`${theme.fg("dim", "worktree:")} ${job.worktreePath ? shortPath(job.worktreePath) : "not isolated"}`,
+			].join("\n"),
+			1,
+			0,
+		);
 }
 
 function detachClient(): void {
@@ -92,9 +110,12 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 			STATUS_KEY,
 			ctx.ui.theme.fg(
 				color,
-				`Agents · ${job.status.replace("_", " ")} · ← detach`,
+				`Agents · ${job.status.replace("_", " ")} · ← or /agents to detach`,
 			),
 		);
+		ctx.ui.setWidget(CONTEXT_WIDGET, contextComponent(job), {
+			placement: "aboveEditor",
+		});
 
 		if (job.status === "complete" && job.recap) {
 			ctx.ui.setWidget(RECAP_WIDGET, recapComponent(job), {
@@ -142,7 +163,6 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 		installAgentsNavigationEditor(
 			ctx,
 			(tui, theme, keybindings) => new CustomEditor(tui, theme, keybindings),
-			() => detachClient(),
 			() => detachClient(),
 		);
 
@@ -217,6 +237,7 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async (event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		ctx.ui.setWidget(CONTEXT_WIDGET, undefined);
 		ctx.ui.setWidget(RECAP_WIDGET, undefined);
 		if (event.reason === "quit")
 			await sendEvent("session_shutdown", { reason: event.reason });

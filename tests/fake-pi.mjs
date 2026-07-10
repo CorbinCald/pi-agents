@@ -104,7 +104,7 @@ if (args.includes("-p")) {
 			const id = `w-${nextId++}`;
 			pending.set(id, { resolve, reject });
 			socket.write(
-				`${JSON.stringify({ id, type: "worker_event", jobId: process.env.PI_AGENT_JOB_ID, eventType, data })}\n`,
+				`${JSON.stringify({ id, type: "worker_event", jobId: process.env.PI_AGENT_JOB_ID, workerPid: process.pid, eventType, data })}\n`,
 			);
 		});
 
@@ -120,15 +120,24 @@ if (args.includes("-p")) {
 			join(process.cwd(), `agent-${process.env.PI_AGENT_JOB_ID}.txt`),
 			prompt,
 		);
-		const output = `Completed isolated task in ${process.cwd()}.`;
+		const fails = /\berror\b/i.test(prompt);
+		const output =
+			/\bask\b/i.test(prompt) || fails
+				? "Which option should I use?"
+				: `Completed isolated task in ${process.cwd()}.`;
 		const assistant = {
 			role: "assistant",
 			content: [{ type: "text", text: output }],
-			stopReason: "stop",
+			stopReason: fails ? "error" : "stop",
+			...(fails ? { errorMessage: "Synthetic worker failure" } : {}),
 			timestamp: Date.now(),
 		};
 		save(assistant);
-		await request("message_end", { text: output, stopReason: "stop" });
+		await request("message_end", {
+			text: output,
+			stopReason: assistant.stopReason,
+			errorMessage: assistant.errorMessage,
+		});
 		await request("agent_settled");
 	};
 
@@ -161,129 +170,6 @@ if (args.includes("-p")) {
 				);
 			} else {
 				void runPrompt(prompt);
-			}
-		}
-	});
-} else {
-	const sessionId = randomUUID();
-	const sessionDir = arg("--session-dir");
-	const openedSession = arg("--session");
-	const sessionFile = openedSession || join(sessionDir, `${sessionId}.jsonl`);
-	mkdirSync(dirname(sessionFile), { recursive: true });
-	let messages = [];
-	if (existsSync(sessionFile)) {
-		try {
-			messages = readFileSync(sessionFile, "utf8")
-				.split("\n")
-				.filter(Boolean)
-				.map((line) => JSON.parse(line))
-				.filter((entry) => entry.type === "message")
-				.map((entry) => entry.message);
-		} catch {
-			messages = [];
-		}
-	} else {
-		writeFileSync(
-			sessionFile,
-			`${JSON.stringify({ type: "session", version: 3, id: sessionId, cwd: process.cwd() })}\n`,
-		);
-	}
-
-	let counter = messages.length;
-	let buffer = "";
-	const save = (message) => {
-		messages.push(message);
-		counter += 1;
-		appendFileSync(
-			sessionFile,
-			`${JSON.stringify({ type: "message", id: counter.toString(16).padStart(8, "0"), parentId: counter === 1 ? null : (counter - 1).toString(16).padStart(8, "0"), timestamp: new Date().toISOString(), message })}\n`,
-		);
-	};
-
-	const reply = (request, data = undefined) =>
-		emit({
-			type: "response",
-			id: request.id,
-			command: request.type,
-			success: true,
-			data,
-		});
-	const runPrompt = (request) => {
-		reply(request);
-		const user = {
-			role: "user",
-			content: [{ type: "text", text: request.message }],
-			timestamp: Date.now(),
-		};
-		save(user);
-		emit({ type: "agent_start" });
-		emit({ type: "message_end", message: user });
-		setTimeout(() => {
-			writeFileSync(
-				join(process.cwd(), `agent-${process.env.PI_AGENT_JOB_ID}.txt`),
-				request.message,
-			);
-			const fails = /\berror\b/i.test(request.message);
-			const output =
-				/\bask\b/i.test(request.message) || fails
-					? "Which option should I use?"
-					: `Completed isolated task in ${process.cwd()}.`;
-			emit({
-				type: "message_update",
-				assistantMessageEvent: { type: "text_delta", delta: output },
-			});
-			const assistant = {
-				role: "assistant",
-				content: [{ type: "text", text: output }],
-				stopReason: fails ? "error" : "stop",
-				...(fails ? { errorMessage: "Synthetic worker failure" } : {}),
-				timestamp: Date.now(),
-			};
-			save(assistant);
-			emit({ type: "message_end", message: assistant });
-			emit({ type: "agent_end", messages: [assistant], willRetry: false });
-			emit({ type: "agent_settled" });
-		}, 120);
-	};
-
-	process.stdin.setEncoding("utf8");
-	process.stdin.on("data", (chunk) => {
-		buffer += chunk;
-		while (true) {
-			const newline = buffer.indexOf("\n");
-			if (newline < 0) break;
-			const line = buffer.slice(0, newline);
-			buffer = buffer.slice(newline + 1);
-			if (!line) continue;
-			const request = JSON.parse(line);
-			switch (request.type) {
-				case "get_state":
-					reply(request, {
-						model: { provider: "fake", id: "fake" },
-						thinkingLevel: "medium",
-						isStreaming: false,
-						sessionFile,
-						sessionId,
-					});
-					break;
-				case "get_messages":
-					reply(request, { messages });
-					break;
-				case "prompt":
-					runPrompt(request);
-					break;
-				case "abort":
-				case "set_session_name":
-					reply(request);
-					break;
-				default:
-					emit({
-						type: "response",
-						id: request.id,
-						command: request.type,
-						success: false,
-						error: "unsupported",
-					});
 			}
 		}
 	});

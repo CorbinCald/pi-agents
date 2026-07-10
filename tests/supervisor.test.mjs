@@ -85,6 +85,33 @@ function connect(socketPath) {
 	});
 }
 
+function sendNativeInput(terminalServer, terminalSession, text) {
+	const buffer = `pi-agents-test-${process.pid}-${Date.now()}`;
+	execFileSync(
+		"tmux",
+		["-L", terminalServer, "load-buffer", "-b", buffer, "-"],
+		{ input: text },
+	);
+	execFileSync("tmux", [
+		"-L",
+		terminalServer,
+		"paste-buffer",
+		"-d",
+		"-b",
+		buffer,
+		"-t",
+		terminalSession,
+	]);
+	execFileSync("tmux", [
+		"-L",
+		terminalServer,
+		"send-keys",
+		"-t",
+		terminalSession,
+		"Enter",
+	]);
+}
+
 test("supervisor runs concurrent isolated sessions, recaps them, and cleans up worktrees", {
 	timeout: 30_000,
 }, async () => {
@@ -105,7 +132,6 @@ test("supervisor runs concurrent isolated sessions, recaps them, and cleans up w
 		env: {
 			...process.env,
 			PI_AGENTS_ROOT: agentsRoot,
-			PI_AGENTS_BACKEND: "rpc",
 			PI_AGENTS_PI_INVOCATION: JSON.stringify({
 				command: process.execPath,
 				argsPrefix: [fakePiPath],
@@ -122,6 +148,7 @@ test("supervisor runs concurrent isolated sessions, recaps them, and cleans up w
 	const socketPath = join(agentsRoot, "supervisor.sock");
 	await waitFor(() => existsSync(socketPath));
 	let client = await connect(socketPath);
+	let terminalServer;
 
 	try {
 		const model = { provider: "fake", id: "fake" };
@@ -149,6 +176,10 @@ test("supervisor runs concurrent isolated sessions, recaps them, and cleans up w
 			}),
 		]);
 
+		terminalServer = first.terminalServer;
+		assert.equal(first.backend, "terminal");
+		assert.equal(second.backend, "terminal");
+		assert.equal(third.backend, "terminal");
 		assert.equal(first.isolated, true);
 		assert.equal(second.isolated, true);
 		assert.equal(third.isolated, true);
@@ -191,14 +222,19 @@ test("supervisor runs concurrent isolated sessions, recaps them, and cleans up w
 		assert.equal(settled.gamma.status, "complete");
 		assert.match(settled.gamma.recap, /Synthetic worker failure/);
 
-		const messageResult = await client.request("messages", { jobId: first.id });
+		const alphaEntries = readFileSync(settled.alpha.sessionFile, "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line));
 		assert.equal(
-			messageResult.messages.filter((message) => message.role === "assistant")
-				.length,
+			alphaEntries.filter(
+				(entry) =>
+					entry.type === "message" && entry.message?.role === "assistant",
+			).length,
 			1,
 		);
 
-		await client.request("prompt", { jobId: second.id, message: "blue" });
+		sendNativeInput(second.terminalServer, second.terminalSession, "blue");
 		const answered = await waitFor(async () => {
 			const records = await client.request("list");
 			const beta = records.find((job) => job.id === second.id);
@@ -224,8 +260,19 @@ test("supervisor runs concurrent isolated sessions, recaps them, and cleans up w
 			remaining.some((job) => job.id === second.id),
 			true,
 		);
+		await client.request("remove", { jobId: second.id });
+		await client.request("remove", { jobId: third.id });
 	} finally {
 		client.close();
+		if (terminalServer) {
+			try {
+				execFileSync("tmux", ["-L", terminalServer, "kill-server"], {
+					stdio: "ignore",
+				});
+			} catch {
+				// Removing the final native session normally stops the private server.
+			}
+		}
 		supervisor.kill("SIGTERM");
 		await Promise.race([
 			new Promise((resolve) => supervisor.once("close", resolve)),
@@ -237,7 +284,7 @@ test("supervisor runs concurrent isolated sessions, recaps them, and cleans up w
 	assert.equal(supervisorError, "");
 });
 
-test("terminal backend keeps a native worker alive across clients and accepts follow-ups", {
+test("native Pi session persists across clients, attaches directly, and accepts terminal input", {
 	timeout: 30_000,
 }, async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-agents-terminal-test-"));
@@ -301,7 +348,27 @@ test("terminal backend keeps a native worker alive across clients and accepts fo
 			["-L", terminalServer, "set-option", "-g", "mouse", "off"],
 			{ stdio: "ignore" },
 		);
-		await client.request("prepare_attach", { jobId: dispatched.id });
+		const prepared = await client.request("prepare_attach", {
+			jobId: dispatched.id,
+		});
+		assert.equal(prepared.sessionFile, completed.sessionFile);
+		assert.equal(prepared.terminalSession, dispatched.terminalSession);
+		assert.equal(
+			execFileSync(
+				"tmux",
+				[
+					"-L",
+					terminalServer,
+					"display-message",
+					"-p",
+					"-t",
+					dispatched.terminalSession,
+					"#{pane_current_path}",
+				],
+				{ encoding: "utf8" },
+			).trim(),
+			completed.cwd,
+		);
 		assert.equal(
 			execFileSync(
 				"tmux",
@@ -334,16 +401,80 @@ test("terminal backend keeps a native worker alive across clients and accepts fo
 		const reconnected = await client.request("list");
 		assert.equal(reconnected[0].isRunning, true);
 
-		await client.request("prompt", {
+		const managedWorkerPid = Number(
+			execFileSync(
+				"tmux",
+				[
+					"-L",
+					dispatched.terminalServer,
+					"display-message",
+					"-p",
+					"-t",
+					dispatched.terminalSession,
+					"#{pane_pid}",
+				],
+				{ encoding: "utf8" },
+			).trim(),
+		);
+
+		// A nested Pi inherits PI_AGENT_JOB_ID, but it does not own the managed
+		// tmux pane and must not be able to stop the parent job.
+		await client.request("worker_event", {
 			jobId: dispatched.id,
-			message: "finish terminal follow-up",
+			workerPid: managedWorkerPid,
+			eventType: "agent_start",
 		});
+		await assert.rejects(
+			client.request("worker_event", {
+				jobId: dispatched.id,
+				workerPid: process.pid,
+				eventType: "session_shutdown",
+				data: { reason: "quit" },
+			}),
+			/not the managed Pi process/,
+		);
+		const records = await client.request("list");
+		assert.equal(
+			records.find((job) => job.id === dispatched.id).status,
+			"working",
+		);
+
+		// If a valid but stale shutdown event is ever applied, definitive tool
+		// activity must still restore the working state.
+		const falselyStopped = await client.request("worker_event", {
+			jobId: dispatched.id,
+			workerPid: managedWorkerPid,
+			eventType: "session_shutdown",
+			data: { reason: "quit" },
+		});
+		assert.equal(falselyStopped.status, "complete");
+		assert.equal(falselyStopped.stopped, true);
+		const recovered = await client.request("worker_event", {
+			jobId: dispatched.id,
+			workerPid: managedWorkerPid,
+			eventType: "tool_execution_start",
+			data: { toolName: "bash", args: { command: "true" } },
+		});
+		assert.equal(recovered.status, "working");
+		assert.equal(recovered.stopped, false);
+		assert.equal(recovered.isStreaming, true);
+
+		sendNativeInput(
+			dispatched.terminalServer,
+			dispatched.terminalSession,
+			"finish terminal follow-up",
+		);
 		const followedUp = await waitFor(async () => {
 			const records = await client.request("list");
 			const job = records.find((record) => record.id === dispatched.id);
+			const outputFile = job
+				? join(job.worktreePath, `agent-${dispatched.id}.txt`)
+				: undefined;
 			return job?.status === "complete" &&
 				job.recap &&
-				existsSync(join(job.worktreePath, `agent-${dispatched.id}.txt`))
+				outputFile &&
+				existsSync(outputFile) &&
+				/follow-up/.test(readFileSync(outputFile, "utf8"))
 				? job
 				: undefined;
 		}, 12_000);

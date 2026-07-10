@@ -1,18 +1,8 @@
 export type AgentStatus = "needs_input" | "working" | "complete";
 
-export interface PendingUiRequest {
-	id: string;
-	method: "select" | "confirm" | "input" | "editor";
-	title?: string;
-	message?: string;
-	placeholder?: string;
-	prefill?: string;
-	options?: string[];
-}
-
 export interface AgentRecord {
 	id: string;
-	backend?: "rpc" | "terminal";
+	backend?: "terminal";
 	terminalServer?: string;
 	terminalSession?: string;
 	sessionId?: string;
@@ -28,7 +18,6 @@ export interface AgentRecord {
 	recap?: string;
 	recapPending?: boolean;
 	waitingFor?: string;
-	pendingUi?: PendingUiRequest;
 	createdAt: number;
 	updatedAt: number;
 	completedAt?: number;
@@ -54,45 +43,9 @@ export interface DispatchRequest {
 	projectTrusted: boolean;
 }
 
-export interface AgentMessagePart {
-	type: string;
-	text?: string;
-	thinking?: string;
-	name?: string;
-	arguments?: Record<string, unknown>;
-	[key: string]: unknown;
-}
-
-export interface AgentMessageRecord {
-	role: string;
-	content?: string | AgentMessagePart[];
-	stopReason?: string;
-	errorMessage?: string;
-	toolName?: string;
-	isError?: boolean;
-	command?: string;
-	output?: string;
-	[key: string]: unknown;
-}
-
-export interface JobEventRecord {
-	type?: string;
-	assistantMessageEvent?: {
-		type?: string;
-		delta?: string;
-	};
-	message?: AgentMessageRecord;
-	[key: string]: unknown;
-}
-
 export interface SupervisorEvent {
 	type: "event";
-	event: "state" | "removed" | "job_event";
+	event: "state" | "removed";
 	job?: AgentRecord;
 	jobId?: string;
-	data?: JobEventRecord;
-}
-
-export interface MessageList {
-	messages: AgentMessageRecord[];
 }
