@@ -1,0 +1,56 @@
+{
+	"name": "pi-agents",
+	"version": "0.1.0",
+	"description": "Unofficial persistent background-agent workspace for Pi",
+	"type": "module",
+	"license": "MIT",
+	"author": {
+		"name": "Corbin Caldwell",
+		"url": "https://github.com/CorbinCald"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/CorbinCald/pi-agents.git"
+	},
+	"bugs": {
+		"url": "https://github.com/CorbinCald/pi-agents/issues"
+	},
+	"homepage": "https://github.com/CorbinCald/pi-agents#readme",
+	"keywords": [
+		"pi-package",
+		"pi-coding-agent",
+		"agents",
+		"background-agents",
+		"tmux",
+		"git-worktree"
+	],
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"peerDependenciesMeta": {
+		"@earendil-works/pi-coding-agent": {
+			"optional": true
+		},
+		"@earendil-works/pi-tui": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.3"
+	},
+	"scripts": {
+		"test": "node --test ./tests/supervisor.test.mjs",
+		"lint": "biome check .",
+		"check:syntax": "node --check ./supervisor.mjs && node --check ./tests/fake-pi.mjs",
+		"check": "npm run check:syntax && npm run lint && npm test"
+	},
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	}
+}

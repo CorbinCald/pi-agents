@@ -1,0 +1,804 @@
+import {
+	DynamicBorder,
+	type ExtensionContext,
+	getSelectListTheme,
+	type KeybindingsManager,
+	type Theme,
+} from "@earendil-works/pi-coding-agent";
+import {
+	type Component,
+	Editor,
+	type Focusable,
+	Input,
+	type KeyId,
+	matchesKey,
+	type TUI,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
+import type { SupervisorClient } from "./client.ts";
+import type {
+	AgentMessageRecord,
+	AgentRecord,
+	AgentStatus,
+	SupervisorEvent,
+} from "./types.ts";
+
+const STATUS_ORDER: AgentStatus[] = ["needs_input", "working", "complete"];
+const STATUS_LABELS: Record<AgentStatus, string> = {
+	needs_input: "Needs Input",
+	working: "Working",
+	complete: "Complete",
+};
+const EMPTY_LABELS: Record<AgentStatus, string> = {
+	needs_input: "No sessions need input.",
+	working: "No sessions are working.",
+	complete: "No completed sessions.",
+};
+const SPINNER = ["✶", "✳", "✢", "✳"];
+
+type ViewMode = "list" | "peek" | "help" | "rename";
+
+export type AgentViewResult =
+	| { type: "close" }
+	| { type: "attach"; jobId: string }
+	| { type: "prefill"; text: string };
+
+export interface AgentViewOptions {
+	cwd: string;
+	model: { provider: string; id: string };
+	getThinkingLevel: () => string;
+	cycleThinkingLevel: () => string;
+	projectTrusted: boolean;
+}
+
+export interface AgentViewOutcome {
+	result: AgentViewResult;
+	tui: TUI;
+}
+
+function formatAge(timestamp: number): string {
+	const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1_000));
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h`;
+	return `${Math.floor(hours / 24)}d`;
+}
+
+function messageText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter(
+			(part): part is { type: "text"; text: string } =>
+				part?.type === "text" && typeof part.text === "string",
+		)
+		.map((part) => part.text)
+		.join("\n");
+}
+
+function shortPath(path: string): string {
+	const home = process.env.HOME;
+	return home && path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+}
+
+function sorted(records: Iterable<AgentRecord>): AgentRecord[] {
+	const statusRank = new Map(
+		STATUS_ORDER.map((status, index) => [status, index]),
+	);
+	return [...records].sort((a, b) => {
+		if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+		const statusDifference =
+			(statusRank.get(a.status) ?? 99) - (statusRank.get(b.status) ?? 99);
+		if (statusDifference) return statusDifference;
+		if (a.order !== b.order) return a.order - b.order;
+		return b.updatedAt - a.updatedAt;
+	});
+}
+
+function fit(line: string, width: number, ellipsis = "…"): string {
+	return truncateToWidth(line, Math.max(1, width), ellipsis);
+}
+
+function fill(line: string, width: number): string {
+	const clipped = fit(line, width, "");
+	return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
+}
+
+class AgentViewComponent implements Component, Focusable {
+	private readonly promptEditor: Editor;
+	private readonly renameInput = new Input();
+	private readonly jobs = new Map<string, AgentRecord>();
+	private readonly border: DynamicBorder;
+	private readonly unsubscribe: () => void;
+	private readonly timer: ReturnType<typeof setInterval>;
+	private mode: ViewMode = "list";
+	private selectedId?: string;
+	private messages: AgentMessageRecord[] = [];
+	private listScroll = 0;
+	private spinnerFrame = 0;
+	private busy = false;
+	private error?: string;
+	private deleteArmed?: { id: string; at: number };
+	private lastCtrlC = 0;
+	private _focused = false;
+	private disposed = false;
+
+	constructor(
+		private readonly tui: TUI,
+		private readonly theme: Theme,
+		private readonly keybindings: KeybindingsManager,
+		private readonly client: SupervisorClient,
+		private readonly options: AgentViewOptions,
+		initialJobs: AgentRecord[],
+		private readonly done: (result: AgentViewResult) => void,
+	) {
+		for (const job of initialJobs) this.jobs.set(job.id, job);
+		this.selectedId = sorted(this.jobs.values())[0]?.id;
+		this.border = new DynamicBorder((text: string) => theme.fg("border", text));
+		this.promptEditor = new Editor(
+			tui,
+			{
+				borderColor: (text: string) => theme.fg("borderAccent", text),
+				selectList: getSelectListTheme(),
+			},
+			{ paddingX: 1, autocompleteMaxVisible: 6 },
+		);
+		this.promptEditor.onSubmit = (text) => {
+			if (this.mode === "peek") this.submitPeekReply(text);
+			else this.submitList(text);
+		};
+		this.unsubscribe = client.onEvent((event) =>
+			this.handleSupervisorEvent(event),
+		);
+		this.timer = setInterval(() => {
+			this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER.length;
+			this.tui.requestRender();
+		}, 160);
+	}
+
+	get focused(): boolean {
+		return this._focused;
+	}
+
+	set focused(value: boolean) {
+		this._focused = value;
+		this.updateFocus();
+	}
+
+	private updateFocus(): void {
+		this.promptEditor.focused =
+			this._focused && (this.mode === "list" || this.mode === "peek");
+		this.renameInput.focused = this._focused && this.mode === "rename";
+	}
+
+	private setMode(mode: ViewMode): void {
+		this.mode = mode;
+		this.error = undefined;
+		this.promptEditor.setText("");
+		this.updateFocus();
+		this.tui.requestRender(true);
+	}
+
+	private selected(): AgentRecord | undefined {
+		return this.selectedId ? this.jobs.get(this.selectedId) : undefined;
+	}
+
+	private orderedJobs(): AgentRecord[] {
+		return sorted(this.jobs.values());
+	}
+
+	private ensureSelection(): void {
+		if (this.selectedId && this.jobs.has(this.selectedId)) return;
+		this.selectedId = this.orderedJobs()[0]?.id;
+	}
+
+	private handleSupervisorEvent(event: SupervisorEvent): void {
+		if (this.disposed) return;
+		if (event.event === "state" && event.job) {
+			this.jobs.set(event.job.id, event.job);
+			this.ensureSelection();
+			if (this.mode === "peek" && event.job.id === this.selectedId) {
+				void this.loadMessages(event.job.id);
+			}
+			this.tui.requestRender();
+			return;
+		}
+		if (event.event === "removed" && event.jobId) {
+			this.jobs.delete(event.jobId);
+			this.ensureSelection();
+			this.tui.requestRender();
+		}
+	}
+
+	private runAction(action: () => Promise<void>): void {
+		if (this.busy) return;
+		this.busy = true;
+		this.error = undefined;
+		this.tui.requestRender();
+		void action()
+			.catch((error) => {
+				this.error = error instanceof Error ? error.message : String(error);
+			})
+			.finally(() => {
+				this.busy = false;
+				if (!this.disposed) this.tui.requestRender();
+			});
+	}
+
+	private moveSelection(direction: -1 | 1): void {
+		const jobs = this.orderedJobs();
+		if (jobs.length === 0) return;
+		const index = Math.max(
+			0,
+			jobs.findIndex((job) => job.id === this.selectedId),
+		);
+		const next = Math.max(0, Math.min(jobs.length - 1, index + direction));
+		this.selectedId = jobs[next]?.id;
+		if (this.mode === "peek" && this.selectedId) {
+			void this.loadMessages(this.selectedId);
+		}
+		this.tui.requestRender();
+	}
+
+	private submitList(rawText: string): void {
+		const prompt = rawText.trim();
+		if (!prompt) {
+			this.attachSelected();
+			return;
+		}
+		if (prompt === "/exit" || prompt === "/quit") {
+			this.done({ type: "close" });
+			return;
+		}
+		this.promptEditor.addToHistory(prompt);
+		this.promptEditor.setText("");
+		this.runAction(async () => {
+			const job = await this.client.dispatch({
+				prompt,
+				cwd: this.options.cwd,
+				model: this.options.model,
+				thinkingLevel: this.options.getThinkingLevel(),
+				projectTrusted: this.options.projectTrusted,
+			});
+			this.jobs.set(job.id, job);
+			this.selectedId = job.id;
+		});
+	}
+
+	private attachSelected(): void {
+		const job = this.selected();
+		if (job && !this.busy) this.done({ type: "attach", jobId: job.id });
+	}
+
+	private async loadMessages(jobId: string): Promise<void> {
+		try {
+			const result = await this.client.messages(jobId);
+			if (this.mode === "peek" && this.selectedId === jobId) {
+				this.messages = result.messages || [];
+				this.tui.requestRender();
+			}
+		} catch (error) {
+			this.error = error instanceof Error ? error.message : String(error);
+			this.tui.requestRender();
+		}
+	}
+
+	private openPeek(): void {
+		const job = this.selected();
+		if (!job) return;
+		this.messages = [];
+		this.setMode("peek");
+		void this.loadMessages(job.id);
+	}
+
+	private submitPeekReply(rawText: string): void {
+		const job = this.selected();
+		const message = rawText.trim();
+		if (!job) return;
+		if (!message) {
+			this.attachSelected();
+			return;
+		}
+		this.promptEditor.addToHistory(message);
+		this.promptEditor.setText("");
+		this.runAction(async () => {
+			const updated = await this.client.prompt(job.id, message);
+			this.jobs.set(updated.id, updated);
+			await this.loadMessages(job.id);
+		});
+	}
+
+	private beginRename(): void {
+		const job = this.selected();
+		if (!job) return;
+		this.renameInput.setValue(job.name);
+		this.setMode("rename");
+	}
+
+	private submitRename(): void {
+		const job = this.selected();
+		const name = this.renameInput.getValue().trim();
+		if (!job || !name) return;
+		this.runAction(async () => {
+			const updated = await this.client.rename(job.id, name);
+			this.jobs.set(updated.id, updated);
+			this.setMode("list");
+		});
+	}
+
+	private togglePin(): void {
+		const job = this.selected();
+		if (!job) return;
+		this.runAction(async () => {
+			const updated = await this.client.pin(job.id, !job.pinned);
+			this.jobs.set(updated.id, updated);
+		});
+	}
+
+	private reorder(direction: -1 | 1): void {
+		const job = this.selected();
+		if (!job) return;
+		this.runAction(async () => {
+			const records = await this.client.reorder(job.id, direction);
+			for (const record of records) this.jobs.set(record.id, record);
+		});
+	}
+
+	private stopOrDelete(): void {
+		if (this.busy) return;
+		const job = this.selected();
+		if (!job) return;
+		const now = Date.now();
+		if (this.deleteArmed?.id === job.id && now - this.deleteArmed.at < 2_000) {
+			this.deleteArmed = undefined;
+			this.runAction(async () => {
+				await this.client.remove(job.id);
+				this.jobs.delete(job.id);
+				this.ensureSelection();
+			});
+			return;
+		}
+		this.deleteArmed = { id: job.id, at: now };
+		this.runAction(async () => {
+			const updated = await this.client.stop(job.id);
+			this.jobs.set(updated.id, updated);
+		});
+	}
+
+	handleInput(data: string): void {
+		if (this.mode === "help") {
+			if (
+				this.keybindings.matches(data, "tui.select.cancel") ||
+				matchesKey(data, "?") ||
+				this.keybindings.matches(data, "tui.select.confirm")
+			) {
+				this.setMode("list");
+			}
+			return;
+		}
+		if (this.mode === "rename") {
+			if (this.keybindings.matches(data, "tui.select.cancel")) {
+				this.setMode("list");
+			} else if (this.keybindings.matches(data, "tui.select.confirm")) {
+				this.submitRename();
+			} else {
+				this.renameInput.handleInput(data);
+			}
+			this.tui.requestRender();
+			return;
+		}
+		if (this.mode === "peek") this.handlePeekInput(data);
+		else this.handleListInput(data);
+	}
+
+	private handleListInput(data: string): void {
+		const inputEmpty = this.promptEditor.getText().length === 0;
+		if (inputEmpty && data === "/") {
+			this.done({ type: "prefill", text: "/" });
+			return;
+		}
+		if (this.keybindings.matches(data, "app.thinking.cycle")) {
+			this.options.cycleThinkingLevel();
+			this.tui.requestRender();
+			return;
+		}
+		if (inputEmpty && this.keybindings.matches(data, "tui.select.up")) {
+			this.moveSelection(-1);
+		} else if (
+			inputEmpty &&
+			this.keybindings.matches(data, "tui.select.down")
+		) {
+			this.moveSelection(1);
+		} else if (inputEmpty && matchesKey(data, "shift+up")) {
+			this.reorder(-1);
+		} else if (inputEmpty && matchesKey(data, "shift+down")) {
+			this.reorder(1);
+		} else if (inputEmpty && matchesKey(data, "right")) {
+			this.attachSelected();
+		} else if (inputEmpty && matchesKey(data, "space")) {
+			this.openPeek();
+		} else if (inputEmpty && matchesKey(data, "ctrl+t")) {
+			this.togglePin();
+		} else if (inputEmpty && matchesKey(data, "ctrl+r")) {
+			this.beginRename();
+		} else if (inputEmpty && matchesKey(data, "ctrl+x")) {
+			this.stopOrDelete();
+		} else if (inputEmpty && matchesKey(data, "?")) {
+			this.setMode("help");
+		} else if (this.keybindings.matches(data, "app.interrupt")) {
+			if (!inputEmpty) this.promptEditor.setText("");
+			else this.done({ type: "close" });
+		} else if (this.keybindings.matches(data, "app.clear")) {
+			if (!inputEmpty) {
+				this.promptEditor.setText("");
+				this.lastCtrlC = 0;
+			} else if (Date.now() - this.lastCtrlC < 500) {
+				this.done({ type: "close" });
+			} else {
+				this.lastCtrlC = Date.now();
+			}
+		} else {
+			for (let index = 1; index <= 9; index++) {
+				if (!matchesKey(data, `alt+${index}` as KeyId)) continue;
+				const job = this.orderedJobs()[index - 1];
+				if (job) this.done({ type: "attach", jobId: job.id });
+				return;
+			}
+			this.promptEditor.handleInput(data);
+		}
+		this.tui.requestRender();
+	}
+
+	private handlePeekInput(data: string): void {
+		const inputEmpty = this.promptEditor.getText().length === 0;
+		if (inputEmpty && this.keybindings.matches(data, "tui.select.up")) {
+			this.moveSelection(-1);
+		} else if (
+			inputEmpty &&
+			this.keybindings.matches(data, "tui.select.down")
+		) {
+			this.moveSelection(1);
+		} else if (inputEmpty && matchesKey(data, "right")) {
+			this.attachSelected();
+		} else if (inputEmpty && matchesKey(data, "space")) {
+			this.setMode("list");
+		} else if (this.keybindings.matches(data, "app.interrupt")) {
+			if (!inputEmpty) this.promptEditor.setText("");
+			else this.setMode("list");
+		} else {
+			this.promptEditor.handleInput(data);
+		}
+		this.tui.requestRender();
+	}
+
+	render(width: number): string[] {
+		const safeWidth = Math.max(1, width);
+		if (this.mode === "help") return this.renderHelp(safeWidth);
+		if (this.mode === "rename") return this.renderRename(safeWidth);
+		if (this.mode === "peek") return this.renderPeek(safeWidth);
+		return this.renderList(safeWidth);
+	}
+
+	private targetHeight(): number {
+		return Math.max(10, this.tui.terminal.rows - 3);
+	}
+
+	private screen(lines: string[], width: number): string[] {
+		const height = this.targetHeight();
+		const fitted = lines.map((line) => fit(line, width, ""));
+		if (fitted.length > height) return fitted.slice(fitted.length - height);
+		return [
+			...fitted,
+			...Array.from({ length: height - fitted.length }, () => ""),
+		];
+	}
+
+	private borderLine(width: number): string {
+		return this.border.render(width)[0] || "";
+	}
+
+	private statusIcon(job: AgentRecord): string {
+		if (job.status === "working") {
+			return this.theme.fg("accent", SPINNER[this.spinnerFrame] ?? "✶");
+		}
+		if (job.status === "needs_input") return this.theme.fg("warning", "✻");
+		if (job.failed) return this.theme.fg("error", "×");
+		if (job.stopped) return this.theme.fg("dim", "∙");
+		return this.theme.fg("success", "●");
+	}
+
+	private renderList(width: number): string[] {
+		this.ensureSelection();
+		const height = this.targetHeight();
+		const jobs = this.orderedJobs();
+		const counts = Object.fromEntries(
+			STATUS_ORDER.map((status) => [
+				status,
+				jobs.filter((job) => job.status === status).length,
+			]),
+		);
+		const header = [
+			this.borderLine(width),
+			` ${this.theme.bold(this.theme.fg("accent", "Agents"))}`,
+			this.theme.fg(
+				"muted",
+				` ${this.options.model.provider}/${this.options.model.id} (${this.options.getThinkingLevel()}) · ${shortPath(this.options.cwd)}`,
+			),
+			this.theme.fg(
+				"dim",
+				` ${counts.needs_input} need input · ${counts.working} working · ${counts.complete} complete`,
+			),
+			"",
+		];
+
+		type ContentLine = { text: string; id?: string };
+		const content: ContentLine[] = [];
+		for (const status of STATUS_ORDER) {
+			content.push({ text: ` ${this.theme.bold(STATUS_LABELS[status])}` });
+			const group = jobs.filter((job) => job.status === status);
+			if (group.length === 0) {
+				content.push({
+					text: `   ${this.theme.fg("dim", EMPTY_LABELS[status])}`,
+				});
+			} else {
+				for (const job of group) {
+					content.push({
+						text: this.renderJobRow(job, Math.max(1, width - 1)),
+						id: job.id,
+					});
+				}
+			}
+			content.push({ text: "" });
+		}
+
+		const editorLines = this.promptEditor.render(width);
+		const footerHeight = 2;
+		const budget = Math.max(
+			1,
+			height - header.length - editorLines.length - footerHeight,
+		);
+		const selectedLine = this.selectedId
+			? content.findIndex((line) => line.id === this.selectedId)
+			: -1;
+		if (selectedLine >= 0) {
+			if (selectedLine < this.listScroll) this.listScroll = selectedLine;
+			if (selectedLine >= this.listScroll + budget) {
+				this.listScroll = selectedLine - budget + 1;
+			}
+		}
+		this.listScroll = Math.max(
+			0,
+			Math.min(this.listScroll, Math.max(0, content.length - budget)),
+		);
+		const visibleContent = content
+			.slice(this.listScroll, this.listScroll + budget)
+			.map((line) =>
+				line.id && line.id === this.selectedId
+					? this.theme.bg("selectedBg", fill(line.text, Math.max(1, width - 1)))
+					: line.text,
+			);
+		while (visibleContent.length < budget) visibleContent.push("");
+
+		return this.screen(
+			[
+				...header,
+				...visibleContent,
+				...editorLines,
+				this.theme.fg("dim", ` ${this.listFooter()}`),
+				this.theme.fg(
+					"dim",
+					" Enter dispatch/open · Space peek · / native commands · ? help",
+				),
+			],
+			width,
+		);
+	}
+
+	private renderJobRow(job: AgentRecord, width: number): string {
+		const age = formatAge(job.updatedAt);
+		const nameWidth = Math.max(12, Math.min(30, Math.floor(width * 0.27)));
+		const icon = job.pinned
+			? this.theme.fg("accent", "◆")
+			: this.statusIcon(job);
+		const name = fit(job.name, nameWidth).padEnd(nameWidth);
+		const isolation = job.isolated ? "" : this.theme.fg("warning", " !");
+		const summaryWidth = Math.max(
+			1,
+			width - nameWidth - age.length - visibleWidth(isolation) - 6,
+		);
+		const summary = fit(job.summary || "", summaryWidth).padEnd(summaryWidth);
+		return fit(
+			`  ${icon} ${name}${isolation} ${this.theme.fg("muted", summary)} ${this.theme.fg("dim", age)}`,
+			width,
+			"",
+		);
+	}
+
+	private listFooter(): string {
+		if (this.error) return `Error: ${this.error}`;
+		if (this.busy) return "Working…";
+		const job = this.selected();
+		if (
+			job &&
+			this.deleteArmed?.id === job.id &&
+			Date.now() - this.deleteArmed.at < 2_000
+		) {
+			return job.worktreePath
+				? "Ctrl+X again deletes the session, branch, and worktree changes"
+				: "Ctrl+X again deletes the session";
+		}
+		return "↑↓ select · → attach · Ctrl+T pin · Ctrl+R rename · Ctrl+X stop/delete";
+	}
+
+	private renderPeek(width: number): string[] {
+		const job = this.selected();
+		if (!job) {
+			this.setMode("list");
+			return this.renderList(width);
+		}
+		const editorLines = this.promptEditor.render(width);
+		const lines = [
+			this.borderLine(width),
+			` ${this.statusIcon(job)} ${this.theme.bold(job.name)}  ${this.theme.fg("dim", formatAge(job.updatedAt))}`,
+			this.theme.fg("muted", ` ${STATUS_LABELS[job.status]} · ${job.summary}`),
+			"",
+		];
+		if (job.waitingFor) {
+			lines.push(
+				` ${this.theme.fg("warning", this.theme.bold("Needs input"))}`,
+			);
+			lines.push(
+				...wrapTextWithAnsi(job.waitingFor, Math.max(1, width - 2)).map(
+					(line) => ` ${line}`,
+				),
+			);
+			if (job.pendingUi?.options?.length) {
+				for (const [index, option] of job.pendingUi.options.entries()) {
+					lines.push(`   ${index + 1}. ${option}`);
+				}
+			}
+			lines.push("");
+		}
+		if (job.recapPending) {
+			lines.push(
+				` ${this.theme.fg("muted", "Preparing recap with gpt-5.6-luna (medium)…")}`,
+				"",
+			);
+		} else if (job.recap) {
+			lines.push(` ${this.theme.fg("accent", this.theme.bold("Recap"))}`);
+			lines.push(
+				...wrapTextWithAnsi(job.recap, Math.max(1, width - 2)).map(
+					(line) => ` ${line}`,
+				),
+				"",
+			);
+		}
+		const lastAssistant = [...this.messages]
+			.reverse()
+			.find((message) => message.role === "assistant");
+		const lastText = lastAssistant ? messageText(lastAssistant.content) : "";
+		if (lastText && !job.waitingFor) {
+			lines.push(` ${this.theme.fg("muted", "Recent output")}`);
+			const recent =
+				lastText.length > 2_000 ? `…${lastText.slice(-2_000)}` : lastText;
+			lines.push(
+				...wrapTextWithAnsi(recent, Math.max(1, width - 2)).map(
+					(line) => ` ${line}`,
+				),
+				"",
+			);
+		}
+		lines.push(
+			this.theme.fg("dim", ` cwd: ${shortPath(job.cwd)}`),
+			...(job.branch ? [this.theme.fg("dim", ` branch: ${job.branch}`)] : []),
+		);
+
+		const bodyBudget = Math.max(
+			1,
+			this.targetHeight() - editorLines.length - 1,
+		);
+		const body = lines.slice(Math.max(0, lines.length - bodyBudget));
+		while (body.length < bodyBudget) body.push("");
+		return this.screen(
+			[
+				...body,
+				...editorLines,
+				this.theme.fg(
+					"dim",
+					` ${this.error || "Enter reply/open · ↑↓ adjacent · → attach · Space/Esc close"}`,
+				),
+			],
+			width,
+		);
+	}
+
+	private renderHelp(width: number): string[] {
+		const lines = [
+			this.borderLine(width),
+			` ${this.theme.bold(this.theme.fg("accent", "Agents shortcuts"))}`,
+			"",
+			" ↑ / ↓             Select a session",
+			" Enter / →         Open the selected native Pi session",
+			" Space             Peek and reply",
+			" Alt+1 … Alt+9     Open session 1–9",
+			" Ctrl+T            Pin or unpin",
+			" Ctrl+R            Rename",
+			" Shift+↑ / ↓       Reorder within a category",
+			" Ctrl+X            Stop; press again to delete",
+			" Shift+Tab         Cycle dispatch thinking level",
+			" /                 Return to native slash commands",
+			" Esc               Clear input or close Agents",
+			"",
+			this.theme.fg(
+				"dim",
+				" Attached sessions are native Pi: ← detaches; all Pi keys and commands remain available.",
+			),
+			"",
+			this.theme.fg("dim", " Press ?, Enter, or Esc to close help"),
+		];
+		return this.screen(lines, width);
+	}
+
+	private renderRename(width: number): string[] {
+		const inputLine = this.renameInput.render(Math.max(1, width - 2))[0] || "";
+		return this.screen(
+			[
+				this.borderLine(width),
+				` ${this.theme.bold(this.theme.fg("accent", "Rename agent session"))}`,
+				"",
+				` ${inputLine}`,
+				"",
+				this.theme.fg("dim", ` ${this.error || "Enter save · Esc cancel"}`),
+			],
+			width,
+		);
+	}
+
+	invalidate(): void {
+		this.promptEditor.invalidate();
+		this.renameInput.invalidate();
+		this.border.invalidate();
+	}
+
+	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
+		clearInterval(this.timer);
+		this.unsubscribe();
+	}
+}
+
+export async function showAgentView(
+	ctx: ExtensionContext,
+	client: SupervisorClient,
+	options: AgentViewOptions,
+): Promise<AgentViewOutcome> {
+	await client.connect(true);
+	const listedJobs = await client.list();
+	const initialJobs = Array.isArray(listedJobs) ? listedJobs : [];
+	let activeTui: TUI | undefined;
+	const result = await ctx.ui.custom<AgentViewResult>(
+		(tui, theme, keybindings, done) => {
+			activeTui = tui;
+			const finish = (result: AgentViewResult) => {
+				done(result);
+				if (result.type === "prefill") ctx.ui.setEditorText(result.text);
+			};
+			return new AgentViewComponent(
+				tui,
+				theme,
+				keybindings,
+				client,
+				options,
+				initialJobs,
+				finish,
+			);
+		},
+	);
+	if (!activeTui) throw new Error("Agents view did not initialize");
+	return { result, tui: activeTui };
+}

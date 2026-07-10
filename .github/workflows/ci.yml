@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install tmux 3.5a
+        shell: bash
+        run: |
+          current="$(tmux -V 2>/dev/null | awk '{print $2}' || true)"
+          if [[ -n "$current" ]] && dpkg --compare-versions "$current" ge 3.5; then
+            tmux -V
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y bison build-essential libevent-dev libncurses-dev pkg-config
+          curl -fsSL https://github.com/tmux/tmux/releases/download/3.5a/tmux-3.5a.tar.gz -o /tmp/tmux-3.5a.tar.gz
+          echo "16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951  /tmp/tmux-3.5a.tar.gz" | sha256sum --check
+          tar -xzf /tmp/tmux-3.5a.tar.gz -C /tmp
+          cd /tmp/tmux-3.5a
+          ./configure
+          make -j"$(nproc)"
+          sudo make install
+          tmux -V
+
+      - run: npm ci --ignore-scripts
+      - run: npm run check
