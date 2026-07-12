@@ -1,5 +1,16 @@
 export type AgentStatus = "needs_input" | "working" | "complete";
 
+export const AGENT_COLORS = [
+	"red",
+	"orange",
+	"yellow",
+	"green",
+	"blue",
+	"purple",
+	"pink",
+] as const;
+export type AgentColor = (typeof AGENT_COLORS)[number];
+
 export interface AgentRecord {
 	id: string;
 	backend?: "terminal";
@@ -22,6 +33,7 @@ export interface AgentRecord {
 	updatedAt: number;
 	completedAt?: number;
 	pinned: boolean;
+	labelColor?: AgentColor;
 	order: number;
 	userRenamed: boolean;
 	isRunning: boolean;

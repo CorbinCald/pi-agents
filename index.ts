@@ -135,32 +135,17 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 		}
 		viewOpen = true;
 		try {
-			while (true) {
-				const outcome = await showAgentView(context, getClient(), {
-					cwd: context.cwd,
-					model: {
-						provider: context.model.provider,
-						id: context.model.id,
-					},
-					getThinkingLevel: () => pi.getThinkingLevel(),
-					cycleThinkingLevel,
-					projectTrusted: context.isProjectTrusted(),
-				});
-				if (outcome.result.type === "close") break;
-				if (outcome.result.type === "prefill") break;
-				try {
-					await attachAgentTerminal(
-						outcome.tui,
-						getClient(),
-						outcome.result.jobId,
-					);
-				} catch (error) {
-					context.ui.notify(
-						error instanceof Error ? error.message : String(error),
-						"error",
-					);
-				}
-			}
+			await showAgentView(context, getClient(), {
+				cwd: context.cwd,
+				model: {
+					provider: context.model.provider,
+					id: context.model.id,
+				},
+				getThinkingLevel: () => pi.getThinkingLevel(),
+				cycleThinkingLevel,
+				projectTrusted: context.isProjectTrusted(),
+				attach: (tui, jobId) => attachAgentTerminal(tui, getClient(), jobId),
+			});
 		} catch (error) {
 			context.ui.notify(
 				error instanceof Error ? error.message : String(error),

@@ -14,7 +14,7 @@ A native Agents workspace for [Pi Coding Agent](https://github.com/earendil-work
 - **Needs Input**, **Working**, and **Complete** session groups
 - Automatic completion classification and concise recaps
 - Isolated Git worktree and branch for each dispatched session
-- Pinning, renaming, reordering, stopping, and deletion
+- Persistent color labels, pinning, renaming, reordering, stopping, and deletion
 - Mouse/trackpad scrollback with a 100,000-line history
 - Source directory and isolated worktree shown inside each native Pi session
 - Empty-prompt **Left Arrow** or `/agents` to open the workspace and detach back to it
@@ -71,6 +71,7 @@ Press `?` in the workspace to show the current controls.
 | `Up` / `Down` | Select a session |
 | `Enter` / `Right` | Open the selected native Pi session |
 | `Alt+1` … `Alt+9` | Open session 1–9 |
+| `C` | Set or clear the selected session's color label |
 | `Ctrl+T` | Pin or unpin |
 | `Ctrl+R` | Rename |
 | `Shift+Up` / `Shift+Down` | Reorder |

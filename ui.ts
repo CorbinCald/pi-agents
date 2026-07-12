@@ -17,7 +17,13 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { SupervisorClient } from "./client.ts";
-import type { AgentRecord, AgentStatus, SupervisorEvent } from "./types.ts";
+import {
+	AGENT_COLORS,
+	type AgentColor,
+	type AgentRecord,
+	type AgentStatus,
+	type SupervisorEvent,
+} from "./types.ts";
 
 const STATUS_ORDER: AgentStatus[] = ["needs_input", "working", "complete"];
 const STATUS_LABELS: Record<AgentStatus, string> = {
@@ -31,12 +37,36 @@ const EMPTY_LABELS: Record<AgentStatus, string> = {
 	complete: "No completed sessions.",
 };
 const SPINNER = ["✶", "✳", "✢", "✳"];
+const COLOR_LABELS: Record<AgentColor, string> = {
+	red: "Red",
+	orange: "Orange",
+	yellow: "Yellow",
+	green: "Green",
+	blue: "Blue",
+	purple: "Purple",
+	pink: "Pink",
+};
+const COLOR_RGB: Record<AgentColor, readonly [number, number, number]> = {
+	red: [255, 95, 95],
+	orange: [255, 159, 67],
+	yellow: [255, 215, 64],
+	green: [80, 200, 120],
+	blue: [88, 166, 255],
+	purple: [177, 128, 255],
+	pink: [255, 118, 190],
+};
+const COLOR_OPTIONS: ReadonlyArray<{
+	color: AgentColor | undefined;
+	label: string;
+}> = [
+	{ color: undefined, label: "None" },
+	...AGENT_COLORS.map((color) => ({ color, label: COLOR_LABELS[color] })),
+];
 
-type ViewMode = "list" | "help" | "rename";
+type ViewMode = "list" | "help" | "rename" | "color";
 
 export type AgentViewResult =
 	| { type: "close" }
-	| { type: "attach"; jobId: string }
 	| { type: "prefill"; text: string };
 
 export interface AgentViewOptions {
@@ -45,6 +75,7 @@ export interface AgentViewOptions {
 	getThinkingLevel: () => string;
 	cycleThinkingLevel: () => string;
 	projectTrusted: boolean;
+	attach: (tui: TUI, jobId: string) => Promise<void>;
 }
 
 export interface AgentViewOutcome {
@@ -90,6 +121,11 @@ function fill(line: string, width: number): string {
 	return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
 }
 
+function colorize(color: AgentColor, text: string): string {
+	const [red, green, blue] = COLOR_RGB[color];
+	return `\u001b[38;2;${red};${green};${blue}m${text}\u001b[39m`;
+}
+
 class AgentViewComponent implements Component, Focusable {
 	private readonly promptEditor: Editor;
 	private readonly renameInput = new Input();
@@ -100,6 +136,7 @@ class AgentViewComponent implements Component, Focusable {
 	private mode: ViewMode = "list";
 	private selectedId?: string;
 	private listScroll = 0;
+	private colorIndex = 0;
 	private spinnerFrame = 0;
 	private busy = false;
 	private error?: string;
@@ -240,9 +277,13 @@ class AgentViewComponent implements Component, Focusable {
 		});
 	}
 
+	private attach(job: AgentRecord | undefined): void {
+		if (!job || this.busy) return;
+		this.runAction(() => this.options.attach(this.tui, job.id));
+	}
+
 	private attachSelected(): void {
-		const job = this.selected();
-		if (job && !this.busy) this.done({ type: "attach", jobId: job.id });
+		this.attach(this.selected());
 	}
 
 	private beginRename(): void {
@@ -269,6 +310,35 @@ class AgentViewComponent implements Component, Focusable {
 		this.runAction(async () => {
 			const updated = await this.client.pin(job.id, !job.pinned);
 			this.jobs.set(updated.id, updated);
+		});
+	}
+
+	private beginColorLabel(): void {
+		const job = this.selected();
+		if (!job) return;
+		this.colorIndex = Math.max(
+			0,
+			COLOR_OPTIONS.findIndex((option) => option.color === job.labelColor),
+		);
+		this.setMode("color");
+	}
+
+	private moveColorSelection(direction: -1 | 1): void {
+		this.colorIndex = Math.max(
+			0,
+			Math.min(COLOR_OPTIONS.length - 1, this.colorIndex + direction),
+		);
+		this.tui.requestRender();
+	}
+
+	private submitColorLabel(): void {
+		const job = this.selected();
+		const color = COLOR_OPTIONS[this.colorIndex]?.color;
+		if (!job) return;
+		this.runAction(async () => {
+			const updated = await this.client.setColor(job.id, color);
+			this.jobs.set(updated.id, updated);
+			this.setMode("list");
 		});
 	}
 
@@ -313,6 +383,24 @@ class AgentViewComponent implements Component, Focusable {
 			}
 			return;
 		}
+		if (this.mode === "color") {
+			if (this.keybindings.matches(data, "tui.select.cancel")) {
+				this.setMode("list");
+			} else if (this.keybindings.matches(data, "tui.select.confirm")) {
+				this.submitColorLabel();
+			} else if (
+				this.keybindings.matches(data, "tui.select.up") ||
+				matchesKey(data, "left")
+			) {
+				this.moveColorSelection(-1);
+			} else if (
+				this.keybindings.matches(data, "tui.select.down") ||
+				matchesKey(data, "right")
+			) {
+				this.moveColorSelection(1);
+			}
+			return;
+		}
 		if (this.mode === "rename") {
 			if (this.keybindings.matches(data, "tui.select.cancel")) {
 				this.setMode("list");
@@ -353,6 +441,8 @@ class AgentViewComponent implements Component, Focusable {
 			this.attachSelected();
 		} else if (inputEmpty && matchesKey(data, "ctrl+t")) {
 			this.togglePin();
+		} else if (inputEmpty && matchesKey(data, "shift+c")) {
+			this.beginColorLabel();
 		} else if (inputEmpty && matchesKey(data, "ctrl+r")) {
 			this.beginRename();
 		} else if (inputEmpty && matchesKey(data, "ctrl+x")) {
@@ -375,7 +465,7 @@ class AgentViewComponent implements Component, Focusable {
 			for (let index = 1; index <= 9; index++) {
 				if (!matchesKey(data, `alt+${index}` as KeyId)) continue;
 				const job = this.orderedJobs()[index - 1];
-				if (job) this.done({ type: "attach", jobId: job.id });
+				this.attach(job);
 				return;
 			}
 			this.promptEditor.handleInput(data);
@@ -387,6 +477,7 @@ class AgentViewComponent implements Component, Focusable {
 		const safeWidth = Math.max(1, width);
 		if (this.mode === "help") return this.renderHelp(safeWidth);
 		if (this.mode === "rename") return this.renderRename(safeWidth);
+		if (this.mode === "color") return this.renderColorLabel(safeWidth);
 		return this.renderList(safeWidth);
 	}
 
@@ -409,13 +500,25 @@ class AgentViewComponent implements Component, Focusable {
 	}
 
 	private statusIcon(job: AgentRecord): string {
-		if (job.status === "working") {
-			return this.theme.fg("accent", SPINNER[this.spinnerFrame] ?? "✶");
+		const glyph = job.pinned
+			? "◆"
+			: job.status === "working"
+				? (SPINNER[this.spinnerFrame] ?? "✶")
+				: job.status === "needs_input"
+					? "✻"
+					: job.failed
+						? "×"
+						: job.stopped
+							? "∙"
+							: "●";
+		if (job.labelColor) return colorize(job.labelColor, glyph);
+		if (job.pinned || job.status === "working") {
+			return this.theme.fg("accent", glyph);
 		}
-		if (job.status === "needs_input") return this.theme.fg("warning", "✻");
-		if (job.failed) return this.theme.fg("error", "×");
-		if (job.stopped) return this.theme.fg("dim", "∙");
-		return this.theme.fg("success", "●");
+		if (job.status === "needs_input") return this.theme.fg("warning", glyph);
+		if (job.failed) return this.theme.fg("error", glyph);
+		if (job.stopped) return this.theme.fg("dim", glyph);
+		return this.theme.fg("success", glyph);
 	}
 
 	private renderList(width: number): string[] {
@@ -508,9 +611,7 @@ class AgentViewComponent implements Component, Focusable {
 	private renderJobRow(job: AgentRecord, width: number): string {
 		const age = formatAge(job.updatedAt);
 		const nameWidth = Math.max(12, Math.min(30, Math.floor(width * 0.27)));
-		const icon = job.pinned
-			? this.theme.fg("accent", "◆")
-			: this.statusIcon(job);
+		const icon = this.statusIcon(job);
 		const name = fit(job.name, nameWidth).padEnd(nameWidth);
 		const isolation = job.isolated ? "" : this.theme.fg("warning", " !");
 		const summaryWidth = Math.max(
@@ -538,7 +639,7 @@ class AgentViewComponent implements Component, Focusable {
 				? "Ctrl+X again deletes the session, branch, and worktree changes"
 				: "Ctrl+X again deletes the session";
 		}
-		return "↑↓ select · → attach · Ctrl+T pin · Ctrl+R rename · Ctrl+X stop/delete";
+		return "↑↓ select · → attach · C color · Ctrl+T pin · Ctrl+R rename · Ctrl+X stop/delete";
 	}
 
 	private renderHelp(width: number): string[] {
@@ -549,6 +650,7 @@ class AgentViewComponent implements Component, Focusable {
 			" ↑ / ↓             Select a session",
 			" Enter / →         Open the selected native Pi session",
 			" Alt+1 … Alt+9     Open session 1–9",
+			" C                 Set or clear color label",
 			" Ctrl+T            Pin or unpin",
 			" Ctrl+R            Rename",
 			" Shift+↑ / ↓       Reorder within a category",
@@ -564,6 +666,33 @@ class AgentViewComponent implements Component, Focusable {
 			"",
 			this.theme.fg("dim", " Press ?, Enter, or Esc to close help"),
 		];
+		return this.screen(lines, width);
+	}
+
+	private renderColorLabel(width: number): string[] {
+		const job = this.selected();
+		const lines = [
+			this.borderLine(width),
+			` ${this.theme.bold(this.theme.fg("accent", "Color label"))}`,
+			this.theme.fg("muted", ` ${job?.name || "No agent selected"}`),
+			"",
+		];
+		for (const [index, option] of COLOR_OPTIONS.entries()) {
+			const marker = option.color
+				? colorize(option.color, "●")
+				: this.theme.fg("dim", "○");
+			const row = fill(`  ${marker} ${option.label}`, Math.max(1, width - 1));
+			lines.push(
+				index === this.colorIndex ? this.theme.bg("selectedBg", row) : row,
+			);
+		}
+		lines.push(
+			"",
+			this.theme.fg(
+				"dim",
+				` ${this.error || "↑↓/←→ choose · Enter save · Esc cancel"}`,
+			),
+		);
 		return this.screen(lines, width);
 	}
 

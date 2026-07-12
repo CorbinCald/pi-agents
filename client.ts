@@ -6,7 +6,12 @@ import { basename, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { AgentRecord, DispatchRequest, SupervisorEvent } from "./types.ts";
+import type {
+	AgentColor,
+	AgentRecord,
+	DispatchRequest,
+	SupervisorEvent,
+} from "./types.ts";
 
 const ROOT = join(getAgentDir(), "agents");
 const SOCKET_PATH = join(ROOT, "supervisor.sock");
@@ -15,6 +20,7 @@ const SUPERVISOR_PATH = fileURLToPath(
 );
 const CONNECT_TIMEOUT_MS = 7_500;
 const REQUEST_TIMEOUT_MS = 120_000;
+const SUPERVISOR_UPGRADE_TIMEOUT_MS = 5_000;
 
 type Listener = (event: SupervisorEvent) => void;
 type PendingRequest = {
@@ -125,6 +131,34 @@ export class SupervisorClient {
 			},
 		});
 		child.unref();
+	}
+
+	private async restartOutdatedSupervisor(): Promise<void> {
+		const status = await this.request<{ pid?: unknown }>("ping");
+		const pid = status.pid;
+		if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) {
+			throw new Error(
+				"The running Agents supervisor cannot be upgraded safely",
+			);
+		}
+
+		const socket = this.socket;
+		this.socket = undefined;
+		socket?.destroy();
+		try {
+			process.kill(pid, "SIGTERM");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		}
+
+		const deadline = Date.now() + SUPERVISOR_UPGRADE_TIMEOUT_MS;
+		while (existsSync(SOCKET_PATH)) {
+			if (Date.now() >= deadline) {
+				throw new Error("Timed out while upgrading the Agents supervisor");
+			}
+			await sleep(50);
+		}
+		await this.connect(true);
 	}
 
 	private openSocket(): Promise<void> {
@@ -286,6 +320,25 @@ export class SupervisorClient {
 
 	pin(jobId: string, pinned: boolean): Promise<AgentRecord> {
 		return this.request("pin", { jobId, pinned });
+	}
+
+	async setColor(
+		jobId: string,
+		color: AgentColor | undefined,
+	): Promise<AgentRecord> {
+		const payload = { jobId, color: color ?? null };
+		try {
+			return await this.request("set_color", payload);
+		} catch (error) {
+			if (
+				!(error instanceof Error) ||
+				!error.message.includes("Unknown supervisor request: set_color")
+			) {
+				throw error;
+			}
+			await this.restartOutdatedSupervisor();
+			return this.request("set_color", payload);
+		}
 	}
 
 	reorder(jobId: string, direction: -1 | 1): Promise<AgentRecord[]> {

@@ -85,6 +85,41 @@ function connect(socketPath) {
 	});
 }
 
+function tmuxSessionExists(terminalServer, terminalSession) {
+	try {
+		execFileSync(
+			"tmux",
+			["-L", terminalServer, "has-session", "-t", terminalSession],
+			{ stdio: "ignore" },
+		);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function attachedTmuxClients(terminalServer, terminalSession) {
+	try {
+		return execFileSync(
+			"tmux",
+			[
+				"-L",
+				terminalServer,
+				"list-clients",
+				"-t",
+				terminalSession,
+				"-F",
+				"#{client_name}",
+			],
+			{ encoding: "utf8" },
+		)
+			.split("\n")
+			.filter(Boolean).length;
+	} catch {
+		return 0;
+	}
+}
+
 function sendNativeInput(terminalServer, terminalSession, text) {
 	const buffer = `pi-agents-test-${process.pid}-${Date.now()}`;
 	execFileSync(
@@ -111,6 +146,232 @@ function sendNativeInput(terminalServer, terminalSession, text) {
 		"Enter",
 	]);
 }
+
+async function stopProcess(child) {
+	child.kill("SIGTERM");
+	await Promise.race([
+		new Promise((resolve) => child.once("close", resolve)),
+		sleep(3_000),
+	]);
+}
+
+test("supervisor persists and validates agent color labels", {
+	timeout: 10_000,
+}, async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-agents-color-test-"));
+	const agentsRoot = join(root, "agents");
+	const jobId = "colorjob";
+	const jobDir = join(agentsRoot, "jobs", jobId);
+	mkdirSync(jobDir, { recursive: true });
+	writeFileSync(
+		join(jobDir, "state.json"),
+		`${JSON.stringify(
+			{
+				id: jobId,
+				name: "Color labels",
+				prompt: "Test color labels",
+				originalCwd: root,
+				cwd: root,
+				model: { provider: "fake", id: "fake" },
+				thinkingLevel: "medium",
+				status: "complete",
+				summary: "Complete",
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				completedAt: Date.now(),
+				pinned: false,
+				order: 1,
+				userRenamed: false,
+				isRunning: false,
+				isStreaming: false,
+				isolated: false,
+			},
+			null,
+			2,
+		)}\n`,
+	);
+
+	const startSupervisor = () =>
+		spawn(process.execPath, [supervisorPath], {
+			env: { ...process.env, PI_AGENTS_ROOT: agentsRoot },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+	const socketPath = join(agentsRoot, "supervisor.sock");
+	let supervisor = startSupervisor();
+	let client;
+
+	try {
+		await waitFor(() => existsSync(socketPath));
+		client = await connect(socketPath);
+		const initial = await client.request("list");
+		assert.equal(initial[0].labelColor, undefined);
+
+		const colored = await client.request("set_color", {
+			jobId,
+			color: "purple",
+		});
+		assert.equal(colored.labelColor, "purple");
+		assert.equal(
+			JSON.parse(readFileSync(join(jobDir, "state.json"), "utf8")).labelColor,
+			"purple",
+		);
+		await assert.rejects(
+			client.request("set_color", { jobId, color: "ultraviolet" }),
+			/invalid agent color/i,
+		);
+
+		client.close();
+		client = undefined;
+		await stopProcess(supervisor);
+		supervisor = startSupervisor();
+		await waitFor(() => existsSync(socketPath));
+		client = await connect(socketPath);
+		const restored = await client.request("list");
+		assert.equal(restored[0].labelColor, "purple");
+
+		const cleared = await client.request("set_color", {
+			jobId,
+			color: null,
+		});
+		assert.equal(cleared.labelColor, undefined);
+		assert.equal(
+			Object.hasOwn(
+				JSON.parse(readFileSync(join(jobDir, "state.json"), "utf8")),
+				"labelColor",
+			),
+			false,
+		);
+	} finally {
+		client?.close();
+		await stopProcess(supervisor);
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("idle cleanup never stops a pending or attached terminal", {
+	timeout: 10_000,
+}, async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-agents-attached-idle-test-"));
+	const agentsRoot = join(root, "agents");
+	const jobId = "attachedidle";
+	const jobDir = join(agentsRoot, "jobs", jobId);
+	mkdirSync(jobDir, { recursive: true });
+	writeFileSync(
+		join(jobDir, "state.json"),
+		`${JSON.stringify(
+			{
+				id: jobId,
+				name: "Attached idle worker",
+				prompt: "Previously completed task",
+				originalCwd: root,
+				cwd: root,
+				model: { provider: "fake", id: "fake" },
+				thinkingLevel: "medium",
+				status: "complete",
+				summary: "Complete",
+				createdAt: Date.now() - 10_000,
+				updatedAt: Date.now() - 10_000,
+				completedAt: Date.now() - 10_000,
+				pinned: false,
+				order: 1,
+				userRenamed: false,
+				isRunning: false,
+				isStreaming: false,
+				isolated: false,
+				projectTrusted: true,
+			},
+			null,
+			2,
+		)}\n`,
+	);
+
+	const supervisor = spawn(process.execPath, [supervisorPath], {
+		env: {
+			...process.env,
+			PI_AGENTS_ROOT: agentsRoot,
+			PI_AGENTS_PI_INVOCATION: JSON.stringify({
+				command: process.execPath,
+				argsPrefix: [fakePiPath],
+			}),
+			PI_AGENTS_TEST_IDLE_WORKER_TTL_MS: "50",
+			PI_AGENTS_TEST_IDLE_WORKER_POLL_MS: "20",
+			PI_AGENTS_TEST_ATTACH_RESERVATION_MS: "250",
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let supervisorError = "";
+	supervisor.stderr.on(
+		"data",
+		(chunk) => (supervisorError += chunk.toString()),
+	);
+	const socketPath = join(agentsRoot, "supervisor.sock");
+	let client;
+	let terminalServer;
+	let terminalSession;
+	const outerServer = `pi-agents-idle-host-${process.pid}-${Date.now()}`;
+
+	try {
+		await waitFor(() => existsSync(socketPath));
+		client = await connect(socketPath);
+		const prepared = await client.request("prepare_attach", { jobId });
+		terminalServer = prepared.terminalServer;
+		terminalSession = prepared.terminalSession;
+
+		// The expired worker must survive cleanup while the caller prepares the
+		// terminal handoff but has not created its tmux client yet.
+		await sleep(120);
+		assert.equal(tmuxSessionExists(terminalServer, terminalSession), true);
+
+		execFileSync("tmux", [
+			"-L",
+			outerServer,
+			"-f",
+			"/dev/null",
+			"new-session",
+			"-d",
+			"-s",
+			"host",
+			"-x",
+			"100",
+			"-y",
+			"30",
+			`env -u TMUX -u TMUX_PANE tmux -L ${terminalServer} attach-session -t ${terminalSession}`,
+		]);
+		await waitFor(
+			() => attachedTmuxClients(terminalServer, terminalSession) === 1,
+		);
+
+		// Let the attach reservation expire and several cleanup ticks run. The
+		// real attached client must independently keep the worker alive.
+		await sleep(350);
+		assert.equal(tmuxSessionExists(terminalServer, terminalSession), true);
+		assert.equal(attachedTmuxClients(terminalServer, terminalSession), 1);
+
+		execFileSync("tmux", ["-L", outerServer, "kill-server"]);
+		await waitFor(
+			() => !tmuxSessionExists(terminalServer, terminalSession),
+			3_000,
+		);
+		const jobs = await client.request("list");
+		assert.equal(jobs[0].isRunning, false);
+	} finally {
+		client?.close();
+		for (const server of [outerServer, terminalServer]) {
+			if (!server) continue;
+			try {
+				execFileSync("tmux", ["-L", server, "kill-server"], {
+					stdio: "ignore",
+				});
+			} catch {
+				// A server exits when its final session is removed.
+			}
+		}
+		await stopProcess(supervisor);
+		rmSync(root, { recursive: true, force: true });
+	}
+
+	assert.equal(supervisorError, "");
+});
 
 test("supervisor runs concurrent isolated sessions, recaps them, and cleans up worktrees", {
 	timeout: 30_000,
@@ -178,6 +439,7 @@ test("supervisor runs concurrent isolated sessions, recaps them, and cleans up w
 
 		terminalServer = first.terminalServer;
 		assert.equal(first.backend, "terminal");
+		assert.equal(first.labelColor, undefined);
 		assert.equal(second.backend, "terminal");
 		assert.equal(third.backend, "terminal");
 		assert.equal(first.isolated, true);

@@ -35,9 +35,34 @@ const RECAP_THINKING = "medium";
 const MAX_RECAP_INPUT_CHARS = 48_000;
 const MAX_EVENT_TEXT_CHARS = 24_000;
 const RECAP_TIMEOUT_MS = 180_000;
-const IDLE_WORKER_TTL_MS = 60 * 60 * 1_000;
+const IDLE_WORKER_TTL_MS = durationFromEnvironment(
+	"PI_AGENTS_TEST_IDLE_WORKER_TTL_MS",
+	60 * 60 * 1_000,
+);
+const IDLE_WORKER_POLL_MS = durationFromEnvironment(
+	"PI_AGENTS_TEST_IDLE_WORKER_POLL_MS",
+	60_000,
+);
+const ATTACH_RESERVATION_MS = durationFromEnvironment(
+	"PI_AGENTS_TEST_ATTACH_RESERVATION_MS",
+	15_000,
+);
 const TMUX_SERVER = `pi-agents-${createHash("sha1").update(ROOT).digest("hex").slice(0, 12)}`;
 const TMUX_CONFIG_PATH = join(ROOT, "tmux.conf");
+const AGENT_COLORS = new Set([
+	"red",
+	"orange",
+	"yellow",
+	"green",
+	"blue",
+	"purple",
+	"pink",
+]);
+
+function durationFromEnvironment(name, fallback) {
+	const value = Number(process.env[name]);
+	return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 
 const piInvocation = (() => {
 	try {
@@ -99,6 +124,7 @@ acquireLock();
 const jobs = new Map();
 const terminalRunning = new Set();
 const terminalWorkerPids = new Map();
+const terminalAttachReservations = new Map();
 const clients = new Set();
 const generations = new Map();
 let gitQueue = Promise.resolve();
@@ -164,6 +190,7 @@ function loadJobs() {
 			parsed.terminalSession ||= `pi-agent-${parsed.id}`;
 			delete parsed.pendingUi;
 			delete parsed.terminalStopping;
+			if (!AGENT_COLORS.has(parsed.labelColor)) delete parsed.labelColor;
 			parsed.isRunning = false;
 			parsed.isStreaming = false;
 			if (parsed.status === "working") {
@@ -284,6 +311,36 @@ async function hasTerminalSession(job) {
 	} catch {
 		return false;
 	}
+}
+
+async function hasAttachedTerminalClient(job) {
+	if (!job.terminalSession) return false;
+	try {
+		const { stdout } = await execFileAsync("tmux", [
+			"-L",
+			TMUX_SERVER,
+			"list-clients",
+			"-t",
+			job.terminalSession,
+			"-F",
+			"#{client_name}",
+		]);
+		return Boolean(stdout.trim());
+	} catch {
+		return false;
+	}
+}
+
+function reserveTerminalAttach(jobId) {
+	terminalAttachReservations.set(jobId, Date.now() + ATTACH_RESERVATION_MS);
+}
+
+function hasTerminalAttachReservation(jobId) {
+	const expiresAt = terminalAttachReservations.get(jobId);
+	if (!expiresAt) return false;
+	if (expiresAt > Date.now()) return true;
+	terminalAttachReservations.delete(jobId);
+	return false;
 }
 
 async function assertTerminalWorker(job, workerPid) {
@@ -409,6 +466,7 @@ async function ensureTerminal(job, initialPrompt) {
 
 async function stopTerminal(job) {
 	if (!job.terminalSession) return;
+	terminalAttachReservations.delete(job.id);
 	job.terminalStopping = true;
 	try {
 		await execFileAsync("tmux", [
@@ -1010,6 +1068,7 @@ async function handleRequest(message) {
 			return dispatchJob(message);
 		case "prepare_attach": {
 			const job = requiredJob(message.jobId);
+			reserveTerminalAttach(job.id);
 			const running = await hasTerminalSession(job);
 			const continuation =
 				!running && job.status === "working"
@@ -1040,6 +1099,23 @@ async function handleRequest(message) {
 		case "pin": {
 			const job = requiredJob(message.jobId);
 			job.pinned = Boolean(message.pinned);
+			emitState(job);
+			return publicJob(job);
+		}
+		case "set_color": {
+			const job = requiredJob(message.jobId);
+			if (message.color === null) {
+				delete job.labelColor;
+			} else if (
+				typeof message.color === "string" &&
+				AGENT_COLORS.has(message.color)
+			) {
+				job.labelColor = message.color;
+			} else {
+				throw new Error(
+					`Invalid agent color; expected ${[...AGENT_COLORS].join(", ")}, or none`,
+				);
+			}
 			emitState(job);
 			return publicJob(job);
 		}
@@ -1170,22 +1246,36 @@ const terminalPollTimer = setInterval(() => {
 }, 2_000);
 
 const idleWorkerTimer = setInterval(() => {
-	const cutoff = Date.now() - IDLE_WORKER_TTL_MS;
 	for (const job of jobs.values()) {
+		const cutoff = Date.now() - IDLE_WORKER_TTL_MS;
 		if (
 			job.status !== "complete" ||
 			job.pinned ||
 			!job.completedAt ||
-			job.completedAt > cutoff
+			job.completedAt > cutoff ||
+			!terminalRunning.has(job.id) ||
+			hasTerminalAttachReservation(job.id)
 		)
 			continue;
-		if (!terminalRunning.has(job.id)) continue;
-		void stopTerminal(job).then(() => {
-			persistJob(job);
-			broadcast({ type: "event", event: "state", job: publicJob(job) });
+		void hasAttachedTerminalClient(job).then((attached) => {
+			const currentCutoff = Date.now() - IDLE_WORKER_TTL_MS;
+			if (
+				attached ||
+				hasTerminalAttachReservation(job.id) ||
+				job.status !== "complete" ||
+				job.pinned ||
+				!job.completedAt ||
+				job.completedAt > currentCutoff ||
+				!terminalRunning.has(job.id)
+			)
+				return;
+			void stopTerminal(job).then(() => {
+				persistJob(job);
+				broadcast({ type: "event", event: "state", job: publicJob(job) });
+			});
 		});
 	}
-}, 60_000);
+}, IDLE_WORKER_POLL_MS);
 
 async function restoreInterruptedJobs() {
 	for (const job of jobs.values()) {
