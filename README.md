@@ -15,7 +15,8 @@ A native Agents workspace for [Pi Coding Agent](https://github.com/earendil-work
 - Automatic completion classification and concise recaps
 - Isolated Git worktree and branch for each dispatched session
 - Persistent color labels, pinning, renaming, reordering, stopping, and deletion
-- Mouse/trackpad scrollback with a 100,000-line history
+- Mouse/trackpad scrollback with a 100,000-line history and automatic clipboard copy on text selection
+- `Alt+C` copies the latest agent message while attached
 - Source directory and isolated worktree shown inside each native Pi session
 - Empty-prompt **Left Arrow** or `/agents` to open the workspace and detach back to it
 
@@ -56,7 +57,9 @@ pi remove git:github.com/CorbinCald/pi-agents
 - Type a task and press **Enter** to dispatch it.
 - Select a session and press **Enter** or **Right Arrow** to hand the terminal directly to its native Pi session.
 - Press **Left Arrow** on an empty attached prompt, or run `/agents`, to detach without interrupting it.
-- Use the **mouse wheel or trackpad** to scroll through an attached conversation. Scroll back to the bottom, or press `q`, to return to the live view.
+- Use the **mouse wheel or trackpad** to scroll through an attached conversation.
+- Drag to select conversation text; releasing the mouse automatically copies it while preserving the highlight and scrollback position. A plain click or printable key clears the selection and returns to live input; the typed key is preserved. Press **Escape** to return without typing.
+- Press **Alt+C** while attached to copy the latest agent message.
 
 Each agent is one persistent interactive Pi process, not a transcript emulation or parallel session UI. On attach, the host UI stops and the terminal is handed directly to that Pi process. Native slash commands, `/new`, `/resume`, model controls, bash mode, external editor support, custom extensions, configured keybindings, and normal Pi shortcuts remain available; Agents only claims Left Arrow when the editor is empty.
 

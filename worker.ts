@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import {
 	CustomEditor,
+	copyToClipboard,
 	DynamicBorder,
 	type ExtensionAPI,
 	type ExtensionContext,
@@ -31,6 +32,29 @@ function messageText(content: unknown): string {
 function shortPath(path: string): string {
 	const home = process.env.HOME;
 	return home && path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+}
+
+async function copyLastAgentMessage(ctx: ExtensionContext): Promise<void> {
+	const branch = ctx.sessionManager.getBranch();
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry?.type !== "message" || entry.message.role !== "assistant") {
+			continue;
+		}
+		const text = messageText(entry.message.content);
+		if (!text) continue;
+		try {
+			await copyToClipboard(text);
+			ctx.ui.notify("Copied last agent message", "info");
+		} catch (error) {
+			ctx.ui.notify(
+				error instanceof Error ? error.message : String(error),
+				"error",
+			);
+		}
+		return;
+	}
+	ctx.ui.notify("No agent messages to copy yet", "warning");
 }
 
 function contextComponent(job: AgentRecord) {
@@ -152,6 +176,11 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 			applyJobState(event.job);
 		}
 	};
+
+	pi.registerShortcut("alt+c", {
+		description: "Copy the last agent message",
+		handler: copyLastAgentMessage,
+	});
 
 	pi.registerCommand("agents", {
 		description: "Detach to the background Agents workspace",
