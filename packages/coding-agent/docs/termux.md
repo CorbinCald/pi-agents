@@ -16,14 +16,17 @@ pkg update && pkg upgrade
 # Install dependencies
 pkg install nodejs termux-api git
 
-# Install pi
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+# Build the canonical Pi Agents source
+git clone https://github.com/CorbinCald/pi-agents.git ~/pi-agents
+cd ~/pi-agents
+npm install --ignore-scripts
+npm run build
 
 # Create config directory
 mkdir -p ~/.pi/agent
 
-# Run pi
-pi
+# Run Pi Agents
+~/pi-agents/pi-test.sh
 ```
 
 ## Clipboard Support

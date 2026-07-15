@@ -22,9 +22,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Keep the public GitHub Release publication last. Binary assets are staged in
-  # a draft release first; cleanup removes the draft if later publishing fails.
+  # This inherited release pipeline targets the upstream @earendil-works npm
+  # namespace. Keep it disabled until Pi Agents has an independent package
+  # namespace and the owner explicitly enables a reviewed replacement.
   build:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

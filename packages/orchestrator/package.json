@@ -26,11 +26,11 @@
 		"pi",
 		"orchestrator"
 	],
-	"author": "Earendil Works",
+	"author": "CorbinCald",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/CorbinCald/pi-agents.git",
 		"directory": "packages/orchestrator"
 	},
 	"engines": {
@@ -41,5 +41,9 @@
 	},
 	"devDependencies": {
 		"shx": "0.4.0"
+	},
+	"homepage": "https://github.com/CorbinCald/pi-agents#readme",
+	"bugs": {
+		"url": "https://github.com/CorbinCald/pi-agents/issues"
 	}
 }

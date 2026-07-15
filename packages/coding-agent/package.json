@@ -92,10 +92,14 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/CorbinCald/pi-agents.git",
 		"directory": "packages/coding-agent"
 	},
 	"engines": {
 		"node": ">=22.19.0"
+	},
+	"homepage": "https://github.com/CorbinCald/pi-agents#readme",
+	"bugs": {
+		"url": "https://github.com/CorbinCald/pi-agents/issues"
 	}
 }

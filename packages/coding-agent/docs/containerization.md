@@ -54,7 +54,11 @@ FROM node:24-bookworm-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends bash ca-certificates git ripgrep \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+RUN git clone https://github.com/CorbinCald/pi-agents.git /opt/pi-agents \
+  && cd /opt/pi-agents \
+  && npm install --ignore-scripts \
+  && npm run build \
+  && ln -s /opt/pi-agents/packages/coding-agent/dist/cli.js /usr/local/bin/pi
 
 WORKDIR /workspace
 ENTRYPOINT ["pi"]

@@ -1,14 +1,14 @@
 <p align="center">
-  <a href="https://pi.dev">
+  <a href="https://github.com/CorbinCald/pi-agents">
     <img alt="pi logo" src="https://pi.dev/logo-auto.svg" width="128">
   </a>
 </p>
-<p align="center">
-  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://www.npmjs.com/package/@earendil-works/pi-coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@earendil-works/pi-coding-agent?style=flat-square" /></a>
-</p>
 
-> New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](../../CONTRIBUTING.md).
+# Pi Agents Coding Agent
+
+**Canonical source:** [CorbinCald/pi-agents](https://github.com/CorbinCald/pi-agents)
+
+This independent distribution includes the built-in Agents workspace. The `@earendil-works/pi-coding-agent` name is temporarily retained for import compatibility; installing that name from npm does not install this repository's custom build.
 
 ---
 
@@ -63,17 +63,17 @@ I regularly publish my own `pi-mono` work sessions here:
 
 ## Quick Start
 
-```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-```
-
-`--ignore-scripts` disables dependency lifecycle scripts during install. Pi does not require install scripts for normal npm installs.
-
-Installer alternative:
+Clone and run the canonical source build:
 
 ```bash
-curl -fsSL https://pi.dev/install.sh | sh
+git clone https://github.com/CorbinCald/pi-agents.git
+cd pi-agents
+npm install --ignore-scripts
+npm run build
+./pi-test.sh
 ```
+
+Do not use the inherited `pi.dev` installer or install `@earendil-works/pi-coding-agent` from npm when you intend to run Pi Agents; those resolve the upstream distribution rather than this custom build. Local release installs created from this repository carry `.pi-local-build`, which disables registry version checks and self-update.
 
 Authenticate with an API key:
 
@@ -314,7 +314,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 
 Pi has two separate startup features:
 
-- **Update check:** fetches `https://pi.dev/api/latest-version` to check whether a newer Pi version exists. Disable it with `PI_SKIP_VERSION_CHECK=1`. Disabling update checks only turns off this check.
+- **Update check:** unmarked compatibility builds fetch `https://pi.dev/api/latest-version`, an upstream service. Pi Agents local builds carry `.pi-local-build` and skip this request. `PI_SKIP_VERSION_CHECK=1` also disables it.
 - **Install/update telemetry:** after first install or a changelog-detected update, sends an anonymous version ping to `https://pi.dev/api/report-install`. This setting also controls optional provider attribution headers for OpenRouter, Cloudflare, and direct NVIDIA NIM requests. Opt out by setting `enableInstallTelemetry` to `false` in `settings.json`, or by setting `PI_TELEMETRY=0`. This does not disable update checks; Pi may still contact `pi.dev` for the latest version unless update checks are disabled or offline mode is enabled.
 
 Use `--offline` or `PI_OFFLINE=1` to disable all startup network operations described here, including update checks, package update checks, and install/update telemetry.
@@ -690,8 +690,4 @@ MIT
 - [@earendil-works/pi-agent-core](https://www.npmjs.com/package/@earendil-works/pi-agent-core): Agent framework
 - [@earendil-works/pi-tui](https://www.npmjs.com/package/@earendil-works/pi-tui): Terminal UI components
 
-<p align="center">
-  <a href="https://pi.dev">pi.dev</a> domain graciously donated by
-  <br /><br />
-  <a href="https://exe.dev"><img src="docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
-</p>
+Upstream project resources remain available at [pi.dev](https://pi.dev). They are external to the canonical Pi Agents repository.

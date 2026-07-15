@@ -1,27 +1,22 @@
 <p align="center">
-  <a href="https://pi.dev">
+  <a href="https://github.com/CorbinCald/pi-agents">
     <img alt="pi logo" src="https://pi.dev/logo-auto.svg" width="128">
   </a>
 </p>
-<p align="center">
-  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://www.npmjs.com/package/@earendil-works/pi-coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@earendil-works/pi-coding-agent?style=flat-square" /></a>
-</p>
 
-> New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
+# Pi Agents
 
-# Pi Agent Harness
+**Canonical source:** [CorbinCald/pi-agents](https://github.com/CorbinCald/pi-agents)
 
-This is the home of the Pi agent harness project including our self extensible coding agent.
+Pi Agents is an independent Pi distribution with a built-in persistent Agents workspace. Bare startup opens the workspace, managed workers remain native Pi sessions, transcripts stay canonical, and supervisor state is isolated under `~/.pi/agent/agents`.
 
-* **[@earendil-works/pi-coding-agent](packages/coding-agent)**: Interactive coding agent CLI
+This repository descends from the Pi project, but its implementation, issues, releases, and development policy are maintained here. `earendil-works/pi` is upstream lineage, not the source of truth for this distribution. The existing `@earendil-works/*` package names are temporarily retained as compatibility identifiers and do not designate repository ownership or an approved update channel.
+
+* **[@earendil-works/pi-coding-agent](packages/coding-agent)**: Pi Agents CLI and built-in workspace
 * **[@earendil-works/pi-agent-core](packages/agent)**: Agent runtime with tool calling and state management
 * **[@earendil-works/pi-ai](packages/ai)**: Unified multi-provider LLM API (OpenAI, Anthropic, Google, …)
 
-To learn more about Pi:
-
-* [Visit pi.dev](https://pi.dev), the project website with demos
-* [Read the documentation](https://pi.dev/docs/latest), but you can also ask the agent to explain itself
+Start with the repository [documentation](packages/coding-agent/docs/index.md). The inherited [pi.dev](https://pi.dev) site documents the upstream ecosystem and may differ from Pi Agents.
 
 ## All Packages
 
@@ -32,7 +27,7 @@ To learn more about Pi:
 | **[@earendil-works/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI with the built-in [Agents workspace](packages/coding-agent/docs/agents.md) |
 | **[@earendil-works/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
 
-For Slack/chat automation and workflows see [earendil-works/pi-chat](https://github.com/earendil-works/pi-chat).
+For upstream Slack/chat automation and workflows, see [earendil-works/pi-chat](https://github.com/earendil-works/pi-chat).
 
 ## Permissions & Containerization
 
@@ -46,16 +41,18 @@ If you need stronger boundaries, containerize or sandbox Pi. See [packages/codin
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules (for both humans and agents).  Longer term plans for Pi can also be found in [RFCs](https://rfc.earendil.com/keyword/pi/).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules. File issues and pull requests against [CorbinCald/pi-agents](https://github.com/CorbinCald/pi-agents).
 
 ## Development
 
 ```bash
-npm install --ignore-scripts  # Install all dependencies without running lifecycle scripts
-npm run build        # Build all packages
-npm run check        # Lint, format, and type check
-./test.sh            # Run tests (skips LLM-dependent tests without API keys)
-./pi-test.sh         # Run pi from sources (can be run from any directory)
+git clone https://github.com/CorbinCald/pi-agents.git
+cd pi-agents
+npm install --ignore-scripts  # Install dependencies without lifecycle scripts
+npm run build                 # Build all packages
+npm run check                 # Lint, format, and type check
+./test.sh                     # Run tests (skips LLM-dependent tests without API keys)
+./pi-test.sh                  # Run Pi Agents from sources
 ```
 
 ## Supply-chain hardening
@@ -66,7 +63,7 @@ We treat npm dependency changes as reviewed code changes.
 - `.npmrc` sets `save-exact=true` and `min-release-age=2` to avoid same-day dependency releases during npm resolution.
 - `package-lock.json` is the dependency ground truth. Pre-commit blocks accidental lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1` is set.
 - `npm run check` verifies pinned direct deps, native TypeScript import compatibility, and the generated coding-agent shrinkwrap.
-- The published CLI package includes `packages/coding-agent/npm-shrinkwrap.json`, generated from the root lockfile, to pin transitive deps for npm users.
+- Packaged CLI artifacts include `packages/coding-agent/npm-shrinkwrap.json`, generated from the root lockfile, to pin transitive dependencies.
 - Release smoke tests use `npm run release:local` to build, pack, and create isolated npm and Bun installs outside the repo before tagging a release.
 - Local release installs, documented npm installs, and `pi update --self` use `--ignore-scripts` where supported.
 - CI installs with `npm ci --ignore-scripts`, and a scheduled GitHub workflow runs `npm audit --omit=dev` plus `npm audit signatures --omit=dev`.
@@ -92,8 +89,4 @@ I regularly publish my own `pi-mono` work sessions here:
 
 MIT
 
-<p align="center">
-  <a href="https://pi.dev">pi.dev</a> domain graciously donated by
-  <br /><br />
-  <a href="https://exe.dev"><img src="packages/coding-agent/docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
-</p>
+Upstream project resources remain available at [pi.dev](https://pi.dev). They are external to the canonical Pi Agents repository.

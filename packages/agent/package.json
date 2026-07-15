@@ -45,7 +45,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/CorbinCald/pi-agents.git",
 		"directory": "packages/agent"
 	},
 	"engines": {
@@ -56,5 +56,9 @@
 		"@vitest/coverage-v8": "4.1.9",
 		"typescript": "5.9.3",
 		"vitest": "4.1.9"
+	},
+	"homepage": "https://github.com/CorbinCald/pi-agents#readme",
+	"bugs": {
+		"url": "https://github.com/CorbinCald/pi-agents/issues"
 	}
 }

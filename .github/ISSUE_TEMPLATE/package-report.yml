@@ -5,11 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use this form to report a package listed on pi.dev. For Pi core bugs, use the bug report template instead.
+        Use this form to report a third-party package as it behaves with Pi Agents. Reports about the upstream pi.dev gallery itself should be filed with the upstream service.
 
-        New issues from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. Issues that do not meet the quality bar in [CONTRIBUTING.md](https://github.com/earendil-works/pi-mono/blob/main/CONTRIBUTING.md) will not be reopened or receive a reply.
-
-        Keep this short. If it doesn't fit on one screen, it's too long. Write in your own voice.
+        Read [CONTRIBUTING.md](https://github.com/CorbinCald/pi-agents/blob/main/CONTRIBUTING.md) and keep the report concise.
 
   - type: input
     id: package-name

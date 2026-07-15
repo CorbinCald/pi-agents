@@ -78,7 +78,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/CorbinCald/pi-agents.git",
 		"directory": "packages/ai"
 	},
 	"engines": {
@@ -88,5 +88,9 @@
 		"@types/node": "24.12.4",
 		"canvas": "3.2.3",
 		"vitest": "4.1.9"
+	},
+	"homepage": "https://github.com/CorbinCald/pi-agents#readme",
+	"bugs": {
+		"url": "https://github.com/CorbinCald/pi-agents/issues"
 	}
 }

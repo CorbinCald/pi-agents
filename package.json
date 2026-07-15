@@ -59,5 +59,13 @@
 		"gaxios": {
 			"rimraf": "6.1.2"
 		}
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/CorbinCald/pi-agents.git"
+	},
+	"homepage": "https://github.com/CorbinCald/pi-agents#readme",
+	"bugs": {
+		"url": "https://github.com/CorbinCald/pi-agents/issues"
 	}
 }

@@ -1,20 +1,20 @@
 # Development
 
-See [AGENTS.md](https://github.com/earendil-works/pi-mono/blob/main/AGENTS.md) for additional guidelines.
+[CorbinCald/pi-agents](https://github.com/CorbinCald/pi-agents) is the canonical repository. See [AGENTS.md](https://github.com/CorbinCald/pi-agents/blob/main/AGENTS.md) for development rules. The optional `upstream` Git remote is read-only lineage; never push project work there.
 
 ## Setup
 
 ```bash
-git clone https://github.com/earendil-works/pi-mono
-cd pi-mono
-npm install
+git clone https://github.com/CorbinCald/pi-agents.git
+cd pi-agents
+npm install --ignore-scripts
 npm run build
 ```
 
 Run from source:
 
 ```bash
-/path/to/pi-mono/pi-test.sh
+/path/to/pi-agents/pi-test.sh
 ```
 
 The script can be run from any directory. Pi keeps the caller's current working directory.

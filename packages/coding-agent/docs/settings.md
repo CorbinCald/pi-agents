@@ -76,9 +76,9 @@ For VS Code, include `--wait` so pi resumes after the editor exits:
 
 ### Telemetry and update checks
 
-`enableInstallTelemetry` only controls the anonymous install/update ping to `https://pi.dev/api/report-install`. Opting out of telemetry does not disable update checks; Pi can still fetch `https://pi.dev/api/latest-version` to look for the latest version.
+`https://pi.dev/api/report-install` and `https://pi.dev/api/latest-version` are inherited upstream services, not Pi Agents infrastructure. Set `enableInstallTelemetry` to `false` (or `PI_TELEMETRY=0`) to disable the anonymous install/update ping. Marked Pi Agents local builds skip the upstream version endpoint and reject self-update; `PI_SKIP_VERSION_CHECK=1` provides the same version-check suppression for unmarked builds.
 
-Set `PI_SKIP_VERSION_CHECK=1` to disable the Pi version update check. Use `--offline` or `PI_OFFLINE=1` to disable all startup network operations described here, including update checks, package update checks, and install/update telemetry.
+Use `--offline` or `PI_OFFLINE=1` to disable all startup network operations described here, including update checks, package update checks, and install/update telemetry.
 
 ### Network
 

@@ -4,39 +4,25 @@ This page gets you from install to a useful first pi session.
 
 ## Install
 
-Pi is distributed as an npm package:
+Pi Agents is source-distributed from its canonical repository:
 
 ```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+git clone https://github.com/CorbinCald/pi-agents.git
+cd pi-agents
+npm install --ignore-scripts
+npm run build
+./pi-test.sh
 ```
 
-`--ignore-scripts` disables dependency lifecycle scripts during install. Pi does not require install scripts for normal npm installs.
+The inherited `@earendil-works/*` names remain in imports for compatibility. Installing `@earendil-works/pi-coding-agent` from npm or using the `pi.dev` installer installs the upstream distribution, not this repository's custom build.
 
-### Uninstall
+Local release installs created from this repository carry `.pi-local-build`; they skip upstream registry checks and reject self-update. To remove a source checkout, delete only the checkout. Settings, credentials, canonical sessions, and Agents runtime state remain under `~/.pi/agent/`.
 
-Use the package manager that installed pi. The curl installer uses npm globally, so curl and npm installs are removed with npm:
-
-```bash
-# curl installer or npm install -g
-npm uninstall -g @earendil-works/pi-coding-agent
-
-# pnpm
-pnpm remove -g @earendil-works/pi-coding-agent
-
-# Yarn
-yarn global remove @earendil-works/pi-coding-agent
-
-# Bun
-bun uninstall -g @earendil-works/pi-coding-agent
-```
-
-Uninstalling pi leaves settings, credentials, sessions, and installed pi packages in `~/.pi/agent/`.
-
-Then start pi in the project directory you want it to work on:
+Run Pi Agents in the project directory you want it to work on:
 
 ```bash
 cd /path/to/project
-pi
+/path/to/pi-agents/pi-test.sh
 ```
 
 ## Authenticate
