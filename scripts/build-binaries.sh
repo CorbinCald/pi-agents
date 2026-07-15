@@ -4,12 +4,13 @@
 # Mirrors .github/workflows/build-binaries.yml
 #
 # Usage:
-#   ./scripts/build-binaries.sh [--skip-install] [--skip-deps] [--skip-build] [--platform <platform>] [--out <dir>]
+#   ./scripts/build-binaries.sh [--skip-install] [--skip-deps] [--skip-build] [--local-build] [--platform <platform>] [--out <dir>]
 #
 # Options:
 #   --skip-install      Skip npm ci
 #   --skip-deps         Skip installing cross-platform dependencies
 #   --skip-build        Skip npm run build
+#   --local-build       Mark binaries and archives as protected local builds
 #   --platform <name>   Build only for specified platform (darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64, windows-arm64)
 #   --out <dir>         Output directory (default: packages/coding-agent/binaries)
 #
@@ -29,6 +30,7 @@ cd "$(dirname "$0")/.."
 SKIP_INSTALL=false
 SKIP_DEPS=false
 SKIP_BUILD=false
+LOCAL_BUILD=false
 PLATFORM=""
 OUTPUT_DIR=""
 
@@ -44,6 +46,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-build)
             SKIP_BUILD=true
+            shift
+            ;;
+        --local-build)
+            LOCAL_BUILD=true
             shift
             ;;
         --platform)
@@ -152,9 +158,14 @@ for platform in "${PLATFORMS[@]}"; do
     cp dist/modes/interactive/theme/*.json "$OUTPUT_DIR/$platform/theme/"
     mkdir -p "$OUTPUT_DIR/$platform/assets"
     cp dist/modes/interactive/assets/* "$OUTPUT_DIR/$platform/assets/"
+    mkdir -p "$OUTPUT_DIR/$platform/agents"
+    cp dist/modes/interactive/agents/*.mjs "$OUTPUT_DIR/$platform/agents/"
     cp -r dist/core/export-html "$OUTPUT_DIR/$platform/"
     cp -r docs "$OUTPUT_DIR/$platform/"
     cp -r examples "$OUTPUT_DIR/$platform/"
+    if [[ "$LOCAL_BUILD" == "true" ]]; then
+        printf '%s\n' '{"schemaVersion":1,"source":"local-release-binary"}' > "$OUTPUT_DIR/$platform/.pi-local-build"
+    fi
 
     case "$platform" in
         darwin-arm64)

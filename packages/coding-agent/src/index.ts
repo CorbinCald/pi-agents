@@ -138,6 +138,7 @@ export type {
 	UserBashEventResult,
 	WidgetPlacement,
 	WorkingIndicatorOptions,
+	WorkspaceStartEvent,
 	WriteToolCallEvent,
 } from "./core/extensions/index.ts";
 export {

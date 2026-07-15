@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, w
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ENV_AGENT_DIR, PACKAGE_NAME, VERSION } from "../src/config.ts";
+import { ENV_AGENT_DIR, LOCAL_BUILD_MARKER_FILENAME, PACKAGE_NAME, VERSION } from "../src/config.ts";
 import type { ResolvedPaths } from "../src/core/package-manager.ts";
 import { InMemorySettingsStorage, SettingsManager } from "../src/core/settings-manager.ts";
 import { ProjectTrustStore } from "../src/core/trust-manager.ts";
@@ -429,6 +429,46 @@ describe("package commands", () => {
 			expect(stderr).not.toContain("at ");
 			expect(process.exitCode).toBe(1);
 		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("blocks all update targets for marked local builds before changing extensions", async () => {
+		const selfPackageDir = join(
+			tempDir,
+			"global-prefix",
+			"lib",
+			"node_modules",
+			"@earendil-works",
+			"pi-coding-agent",
+		);
+		const fakeNpmPath = join(tempDir, "fake-local-build-npm.cjs");
+		const recordPath = join(tempDir, "local-build-update.json");
+		mkdirSync(selfPackageDir, { recursive: true });
+		writeFileSync(join(selfPackageDir, LOCAL_BUILD_MARKER_FILENAME), "local\n");
+		writeFileSync(fakeNpmPath, `require("node:fs").writeFileSync(${JSON.stringify(recordPath)}, "updated");`);
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ packages: ["npm:fake-package"], npmCommand: [originalExecPath, fakeNpmPath] }),
+		);
+		process.env.PI_PACKAGE_DIR = selfPackageDir;
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			await expect(runPackageCommandDirectly(["update", "--all"])).resolves.toBeUndefined();
+
+			expect(process.exitCode).toBe(1);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(existsSync(recordPath)).toBe(false);
+			expect(logSpy.mock.calls.flat().join("\n")).not.toContain("Updated pi");
+			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
+			expect(stderr).toContain("Registry self-update is disabled for this local build");
+			expect(stderr).toContain("pi update --extensions");
+		} finally {
+			logSpy.mockRestore();
 			errorSpy.mockRestore();
 		}
 	});

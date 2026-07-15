@@ -11,6 +11,7 @@ const packages = [
 	{ directory: "packages/agent", name: "@earendil-works/pi-agent-core" },
 	{ directory: "packages/coding-agent", name: "@earendil-works/pi-coding-agent" },
 ];
+const localBuildMarkerFilename = ".pi-local-build";
 
 function printUsage() {
 	console.log(`Usage: node scripts/local-release.mjs [options]
@@ -109,6 +110,13 @@ function isInsidePath(child, parent) {
 	return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
+function markLocalBuild(directory, source) {
+	writeFileSync(
+		join(directory, localBuildMarkerFilename),
+		`${JSON.stringify({ schemaVersion: 1, source, createdAt: new Date().toISOString() }, undefined, "\t")}\n`,
+	);
+}
+
 function prepareOutputDirectory(options, repoRoot) {
 	if (!options.outDir) {
 		return mkdtempSync(join(tmpdir(), "pi-local-release-"));
@@ -153,6 +161,7 @@ function buildBunBinaryRelease(targetDirectory, archiveDirectory) {
 		"--skip-install",
 		"--skip-deps",
 		"--skip-build",
+		"--local-build",
 		"--platform",
 		platform,
 		"--out",
@@ -240,6 +249,7 @@ if (!options.skipInstall) {
 	writeFileSync(join(nodeInstallDirectory, "package.json"), installPackageJson);
 
 	run("npm", ["install", "--omit=dev", "--ignore-scripts"], { cwd: nodeInstallDirectory });
+	markLocalBuild(join(nodeInstallDirectory, "node_modules", "@earendil-works", "pi-coding-agent"), "local-release-node");
 	createPiShim(nodeInstallDirectory);
 
 	if (!options.skipBunInstall) {
@@ -252,6 +262,10 @@ if (!options.skipInstall) {
 		);
 		writeFileSync(join(bunInstallDirectory, "package.json"), `${JSON.stringify({ private: true, dependencies: bunDependencies, overrides: bunDependencies }, undefined, "\t")}\n`);
 		run("bun", ["install", "--production", "--ignore-scripts"], { cwd: bunInstallDirectory });
+		markLocalBuild(
+			join(bunInstallDirectory, "node_modules", "@earendil-works", "pi-coding-agent"),
+			"local-release-bun",
+		);
 		createPiShim(bunInstallDirectory);
 	}
 }

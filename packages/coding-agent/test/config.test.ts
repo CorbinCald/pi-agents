@@ -7,6 +7,8 @@ import {
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
 	getUpdateInstruction,
+	isLocalBuild,
+	LOCAL_BUILD_MARKER_FILENAME,
 } from "../src/config.ts";
 
 const execPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath");
@@ -432,6 +434,17 @@ describe("detectInstallMethod", () => {
 		expect(getSelfUpdateCommand("@earendil-works/pi-coding-agent")).toBeUndefined();
 		expect(getSelfUpdateUnavailableInstruction("@earendil-works/pi-coding-agent")).toContain(
 			"the install path is not writable",
+		);
+	});
+
+	test("does not self-update marked local builds", () => {
+		const { packageDir } = createNpmPrefixInstall();
+		writeFileSync(join(packageDir, LOCAL_BUILD_MARKER_FILENAME), "local\n");
+
+		expect(isLocalBuild()).toBe(true);
+		expect(getSelfUpdateCommand("@earendil-works/pi-coding-agent")).toBeUndefined();
+		expect(getSelfUpdateUnavailableInstruction("@earendil-works/pi-coding-agent")).toContain(
+			"Registry self-update is disabled for this local build",
 		);
 	});
 });

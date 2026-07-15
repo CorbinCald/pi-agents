@@ -198,6 +198,8 @@ export interface ExtensionUIContext {
 		) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
 		options?: {
 			overlay?: boolean;
+			/** Replace the complete application surface until done() is called. Cannot be combined with overlay. */
+			fullscreen?: boolean;
 			/** Overlay positioning/sizing options. Can be static or a function for dynamic updates. */
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			/** Called with the overlay handle after the overlay is shown. Use to control visibility. */
@@ -539,6 +541,14 @@ export interface ResourcesDiscoverResult {
 	skillPaths?: string[];
 	promptPaths?: string[];
 	themePaths?: string[];
+}
+
+/**
+ * Fired once when a bare interactive `pi` invocation starts an extension-provided workspace.
+ * Registering this event makes the otherwise-unused host session ephemeral.
+ */
+export interface WorkspaceStartEvent {
+	type: "workspace_start";
 }
 
 // ============================================================================
@@ -1019,6 +1029,7 @@ export function isToolCallEventType(toolName: string, event: ToolCallEvent): boo
 export type ExtensionEvent =
 	| ProjectTrustEvent
 	| ResourcesDiscoverEvent
+	| WorkspaceStartEvent
 	| SessionEvent
 	| ContextEvent
 	| BeforeProviderRequestEvent
@@ -1170,6 +1181,7 @@ export interface ExtensionAPI {
 
 	on(event: "project_trust", handler: ProjectTrustHandler): void;
 	on(event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): void;
+	on(event: "workspace_start", handler: ExtensionHandler<WorkspaceStartEvent>): void;
 	on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;
 	on(event: "session_info_changed", handler: ExtensionHandler<SessionInfoChangedEvent>): void;
 	on(

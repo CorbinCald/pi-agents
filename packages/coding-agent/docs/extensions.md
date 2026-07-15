@@ -279,7 +279,8 @@ pi starts
   │
   ├─► project_trust (user/global and CLI extensions only, before project resources load)
   ├─► session_start { reason: "startup" }
-  └─► resources_discover { reason: "startup" }
+  ├─► resources_discover { reason: "startup" }
+  └─► workspace_start (bare interactive invocation, when registered)
       │
       ▼
 user sends prompt ─────────────────────────────────────────┐
@@ -365,6 +366,23 @@ pi.on("project_trust", async (event, ctx) => {
 ```
 
 A `project_trust` handler must return `{ trusted: "yes" | "no" | "undecided" }`. A user/global or CLI extension that returns `"yes"` or `"no"` owns the decision; the first yes/no decision wins and suppresses the built-in trust prompt. Use `remember: true` to persist a yes/no decision; otherwise it applies only to the current process. Return `"undecided"` to let later handlers or the built-in trust flow decide. Check `ctx.hasUI` before prompting. If no handler returns yes/no, normal trust resolution continues: saved `trust.json` decisions apply first, then `defaultProjectTrust` controls whether pi asks, trusts, or declines by default.
+
+#### workspace_start
+
+Fired once after startup resources are bound when `pi` is invoked interactively with no arguments. Registering this event turns the unused host conversation into an in-memory session, allowing an extension to provide the initial application workspace without creating a transcript. It is not emitted for `--session`, `--resume`, initial prompts, non-interactive modes, or replacement sessions.
+
+Use fullscreen custom UI so the workspace owns the complete terminal surface:
+
+```typescript
+pi.on("workspace_start", async (_event, ctx) => {
+  await ctx.ui.custom(
+    (tui, theme, keybindings, done) => new Workspace(tui, theme, keybindings, done),
+    { fullscreen: true },
+  );
+});
+```
+
+Only one startup workspace should be enabled at a time. If multiple extensions register handlers, they run in extension order.
 
 ### Resource Events
 
@@ -2648,6 +2666,19 @@ The callback receives:
 - `done(value)` - Call to close component and return value
 
 See [tui.md](tui.md) for the full component API.
+
+#### Fullscreen Mode
+
+Pass `{ fullscreen: true }` to replace the header, conversation, editor, widgets, and footer with one component until `done()` is called. The original application surface and editor focus are restored afterward. Fullscreen mode cannot be combined with overlay mode.
+
+```typescript
+const result = await ctx.ui.custom<string>(
+  (tui, theme, keybindings, done) => new Workspace(tui, theme, keybindings, done),
+  { fullscreen: true },
+);
+```
+
+A fullscreen component may temporarily stop the provided `tui` while handing the terminal to another interactive process, but it must restart and redraw that same TUI before resuming.
 
 #### Overlay Mode (Experimental)
 

@@ -139,6 +139,23 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | `app.tree.filter.cycleForward` | `ctrl+o` | Cycle tree filter forward |
 | `app.tree.filter.cycleBackward` | `shift+ctrl+o` | Cycle tree filter backward |
 
+### Agents Workspace
+
+Used inside the built-in [Agents workspace](agents.md). Selection, confirmation, cancellation, Left, Right, session rename, and thinking-level actions reuse their existing TUI or application keybindings.
+
+| Keybinding id | Default | Description |
+|--------|---------|-------------|
+| `app.agents.reorderUp` | `shift+up` | Move the selected agent up within its status group |
+| `app.agents.reorderDown` | `shift+down` | Move the selected agent down within its status group |
+| `app.agents.pin` | `ctrl+t` | Pin or unpin the selected agent |
+| `app.agents.color` | `shift+c` | Set or clear the selected agent's color label |
+| `app.agents.stop` | `ctrl+x` | Stop the selected agent; repeat to hide it |
+| `app.agents.help` | `?` | Show Agents workspace help |
+| `app.agents.nativeCommands` | `/` | Return to native commands when opened from a session |
+| `app.agents.exitHost` | `ctrl+c` | Exit the host while managed sessions keep running |
+| `app.agents.terminalCopy` | `ctrl+shift+c` | Preserve the terminal copy gesture |
+| `app.agents.open1` … `app.agents.open9` | `alt+1` … `alt+9` | Open agent 1–9 |
+
 ### Scoped Models Selector
 
 Used inside the scoped models selector (opened via `/scoped-models`).

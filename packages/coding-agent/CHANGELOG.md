@@ -16,6 +16,9 @@
 - Added provider-owned `/login` discovery directly from registered pi-ai providers, including ambient auth status and informational links.
 - Added file-backed dynamic catalogs in `models-store.json`, per-provider pi.dev catalog overlays, and Radius gateway support including offline migration from legacy credential-cached catalogs.
 - Added extension provider `refreshModels(context)` support for dynamic model discovery with optional provider-controlled persistence.
+- Added a built-in Agents workspace for persistent native Pi sessions, including packaged supervisor scripts, canonical transcript discovery, and isolated Git worktrees.
+- Added bare-startup workspace events and fullscreen extension components.
+- Added a local-build provenance marker that disables registry version checks and blocks self-update while preserving extension-only updates.
 
 ### Changed
 
@@ -27,6 +30,7 @@
 
 - Fixed configured-provider catalog refresh to parse pi.dev's model-ID keyed responses, throttle checks to once per four hours, send the versioned pi user agent, treat unimplemented routes as unavailable overlays, and show concise refresh status in `/model`.
 - Fixed adjacent assistant thinking blocks to render as one thinking section.
+- Fixed completed compaction summaries rendering twice in interactive mode.
 
 ## [0.80.7] - 2026-07-14
 

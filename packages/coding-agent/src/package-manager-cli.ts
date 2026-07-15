@@ -10,6 +10,7 @@ import {
 	getPackageDir,
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
+	isLocalBuild,
 	PACKAGE_NAME,
 	type SelfUpdateCommand,
 	type SelfUpdatePackageTarget,
@@ -756,6 +757,16 @@ export async function handlePackageCommand(
 
 			case "update": {
 				const target = options.updateTarget ?? { type: "self" };
+				if (updateTargetIncludesSelf(target) && isLocalBuild()) {
+					console.error(chalk.red("Registry self-update is disabled for this local build."));
+					console.error(
+						chalk.dim(
+							`Rebuild and reinstall pi from its source checkout. Run ${APP_NAME} update --extensions to update extensions only.`,
+						),
+					);
+					process.exitCode = 1;
+					return true;
+				}
 				if (options.showExtensionsSkippedNote) {
 					console.log(
 						chalk.dim(`Extensions are skipped. Run ${APP_NAME} update --extensions to update extensions.`),

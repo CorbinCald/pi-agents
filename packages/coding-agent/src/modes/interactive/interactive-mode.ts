@@ -75,7 +75,6 @@ import type {
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
-import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
@@ -309,6 +308,8 @@ export interface InteractiveModeOptions {
 	initialImages?: ImageContent[];
 	/** Additional messages to send after the initial message */
 	initialMessages?: string[];
+	/** Run an extension workspace instead of creating a visible host conversation on bare startup. */
+	startExtensionWorkspace?: boolean;
 	/** Force verbose startup (overrides quietStartup setting) */
 	verbose?: boolean;
 }
@@ -715,7 +716,14 @@ export class InteractiveMode {
 		this.setupKeyHandlers();
 		this.setupEditorSubmitHandler();
 
-		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
+		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs.
+		// A startup workspace keeps rendering paused until its fullscreen component is mounted,
+		// preventing the native conversation shell from flashing first.
+		const startsExtensionWorkspace =
+			this.options.startExtensionWorkspace === true && this.session.extensionRunner.hasHandlers("workspace_start");
+		if (startsExtensionWorkspace) {
+			this.ui.pauseRendering();
+		}
 		this.ui.start();
 		this.isInitialized = true;
 
@@ -788,6 +796,16 @@ export class InteractiveMode {
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
+
+		if (startsExtensionWorkspace) {
+			try {
+				await this.session.extensionRunner.emit({ type: "workspace_start" });
+			} finally {
+				// A fullscreen custom component resumes rendering as soon as it mounts.
+				// This fallback keeps Pi usable if a workspace handler returns or fails first.
+				this.ui.resumeRendering();
+			}
+		}
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -2418,7 +2436,7 @@ export class InteractiveMode {
 		}
 	}
 
-	/** Show a custom component with keyboard focus. Overlay mode renders on top of existing content. */
+	/** Show a custom component with keyboard focus. */
 	private async showExtensionCustom<T>(
 		factory: (
 			tui: TUI,
@@ -2428,12 +2446,19 @@ export class InteractiveMode {
 		) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
 		options?: {
 			overlay?: boolean;
+			fullscreen?: boolean;
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			onHandle?: (handle: OverlayHandle) => void;
 		},
 	): Promise<T> {
 		const savedText = this.editor.getText();
 		const isOverlay = options?.overlay ?? false;
+		const isFullscreen = options?.fullscreen ?? false;
+		if (isOverlay && isFullscreen) {
+			throw new Error("Custom UI cannot be both an overlay and fullscreen");
+		}
+		const savedRootChildren = isFullscreen ? [...this.ui.children] : [];
+		let fullscreenMounted = false;
 
 		const restoreEditor = () => {
 			this.editorContainer.clear();
@@ -2441,6 +2466,18 @@ export class InteractiveMode {
 			this.editor.setText(savedText);
 			this.ui.setFocus(this.editor);
 			this.ui.requestRender();
+		};
+
+		const restoreFullscreen = () => {
+			if (!fullscreenMounted) return;
+			this.ui.clear();
+			for (const child of savedRootChildren) {
+				this.ui.addChild(child);
+			}
+			this.editor.setText(savedText);
+			this.ui.setFocus(this.editor);
+			fullscreenMounted = false;
+			this.ui.requestRender(true);
 		};
 
 		return new Promise((resolve, reject) => {
@@ -2451,8 +2488,8 @@ export class InteractiveMode {
 				if (closed) return;
 				closed = true;
 				if (isOverlay) this.ui.hideOverlay();
+				else if (isFullscreen) restoreFullscreen();
 				else restoreEditor();
-				// Note: both branches above already call requestRender
 				resolve(result);
 				try {
 					component?.dispose?.();
@@ -2482,6 +2519,13 @@ export class InteractiveMode {
 						const handle = this.ui.showOverlay(component, resolveOptions());
 						// Expose handle to caller for visibility control
 						options?.onHandle?.(handle);
+					} else if (isFullscreen) {
+						this.ui.clear();
+						this.ui.addChild(component);
+						fullscreenMounted = true;
+						this.ui.setFocus(component);
+						this.ui.resumeRendering();
+						this.ui.requestRender(true);
 					} else {
 						this.editorContainer.clear();
 						this.editorContainer.addChild(component);
@@ -2491,7 +2535,8 @@ export class InteractiveMode {
 				})
 				.catch((err) => {
 					if (closed) return;
-					if (!isOverlay) restoreEditor();
+					if (isFullscreen) restoreFullscreen();
+					else if (!isOverlay) restoreEditor();
 					reject(err);
 				});
 		});
@@ -3058,13 +3103,6 @@ export class InteractiveMode {
 				} else if (event.result) {
 					this.chatContainer.clear();
 					this.rebuildChatFromMessages();
-					this.addMessageToChat(
-						createCompactionSummaryMessage(
-							event.result.summary,
-							event.result.tokensBefore,
-							new Date().toISOString(),
-						),
-					);
 					this.footer.invalidate();
 				} else if (event.errorMessage) {
 					if (event.reason === "manual") {

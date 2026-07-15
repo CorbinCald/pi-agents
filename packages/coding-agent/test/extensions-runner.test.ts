@@ -483,6 +483,28 @@ describe("ExtensionRunner", () => {
 		});
 	});
 
+	describe("startup workspace", () => {
+		it("emits workspace_start with the interactive extension context", async () => {
+			const extensionPath = path.join(extensionsDir, "workspace.ts");
+			fs.writeFileSync(
+				extensionPath,
+				`export default function(pi) {
+	pi.on("workspace_start", (_event, ctx) => ctx.ui.notify("workspace mounted"));
+}`,
+			);
+			const result = await loadExtensions([extensionPath], tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const notify = vi.fn();
+			runner.bindCore(extensionActions, extensionContextActions);
+			runner.setUIContext({ notify } as unknown as ExtensionUIContext, "tui");
+
+			expect(runner.hasHandlers("workspace_start")).toBe(true);
+			await runner.emit({ type: "workspace_start" });
+
+			expect(notify).toHaveBeenCalledWith("workspace mounted");
+		});
+	});
+
 	describe("context creation", () => {
 		it("exposes the current abort signal on ExtensionContext", async () => {
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);

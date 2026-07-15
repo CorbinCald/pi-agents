@@ -39,6 +39,7 @@ I regularly publish my own `pi-mono` work sessions here:
 - [Quick Start](#quick-start)
 - [Providers & Models](#providers--models)
 - [Interactive Mode](#interactive-mode)
+  - [Agents Workspace](#agents-workspace)
   - [Editor](#editor)
   - [Commands](#commands)
   - [Keyboard Shortcuts](#keyboard-shortcuts)
@@ -154,6 +155,12 @@ The interface from top to bottom:
 
 The editor can be temporarily replaced by other UI, like built-in `/settings` or custom UI from extensions (e.g., a Q&A tool that lets the user answer model questions in a structured format). [Extensions](#extensions) can also replace the editor, add widgets above/below it, a status line, custom footer, or overlays.
 
+### Agents Workspace
+
+A bare `pi` invocation opens the built-in fullscreen Agents workspace. It can dispatch multiple persistent Pi sessions in isolated Git worktrees, group them by state, and attach to each session's native TUI without interrupting the others. Transcripts remain in `~/.pi/agent/sessions/`; supervisor and worktree state remains in `~/.pi/agent/agents/`.
+
+See [Agents Workspace](docs/agents.md) for requirements, controls, persistence, and isolation behavior.
+
 ### Editor
 
 | Feature | How |
@@ -174,6 +181,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | Command | Description |
 |---------|-------------|
 | `/login`, `/logout` | OAuth authentication |
+| `/agents` | Open or detach to the Agents workspace |
 | `/model` | Switch models |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Thinking level, theme, message delivery, transport |
@@ -490,7 +498,7 @@ Pi is aggressively extensible so it doesn't have to dictate your workflow. Featu
 
 **No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support. [Why?](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/)
 
-**No sub-agents.** There's many ways to do this. Spawn pi instances via tmux, or build your own with [extensions](#extensions), or install a package that does it your way.
+**No in-process sub-agent tool.** Use the built-in [Agents workspace](docs/agents.md) for persistent native Pi sessions, or build a different orchestration model with [extensions](#extensions).
 
 **No permission popups.** Run in a container, or build your own confirmation flow with [extensions](#extensions) inline with your environment and security requirements.
 

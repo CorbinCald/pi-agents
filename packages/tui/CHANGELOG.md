@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added rendering pause and resume controls for atomically mounting fullscreen application workspaces.
+
 ## [0.80.7] - 2026-07-14
 
 ### Fixed

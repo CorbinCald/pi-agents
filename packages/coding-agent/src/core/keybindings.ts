@@ -53,6 +53,24 @@ export interface AppKeybindings {
 	"app.tree.filter.all": true;
 	"app.tree.filter.cycleForward": true;
 	"app.tree.filter.cycleBackward": true;
+	"app.agents.reorderUp": true;
+	"app.agents.reorderDown": true;
+	"app.agents.pin": true;
+	"app.agents.color": true;
+	"app.agents.stop": true;
+	"app.agents.help": true;
+	"app.agents.nativeCommands": true;
+	"app.agents.exitHost": true;
+	"app.agents.terminalCopy": true;
+	"app.agents.open1": true;
+	"app.agents.open2": true;
+	"app.agents.open3": true;
+	"app.agents.open4": true;
+	"app.agents.open5": true;
+	"app.agents.open6": true;
+	"app.agents.open7": true;
+	"app.agents.open8": true;
+	"app.agents.open9": true;
 }
 
 export type AppKeybinding = keyof AppKeybindings;
@@ -204,6 +222,36 @@ export const KEYBINDINGS = {
 		defaultKeys: "shift+ctrl+o",
 		description: "Tree filter: cycle backward",
 	},
+	"app.agents.reorderUp": {
+		defaultKeys: "shift+up",
+		description: "Move agent up within its status group",
+	},
+	"app.agents.reorderDown": {
+		defaultKeys: "shift+down",
+		description: "Move agent down within its status group",
+	},
+	"app.agents.pin": { defaultKeys: "ctrl+t", description: "Pin or unpin agent" },
+	"app.agents.color": { defaultKeys: "shift+c", description: "Set agent color label" },
+	"app.agents.stop": { defaultKeys: "ctrl+x", description: "Stop or hide agent" },
+	"app.agents.help": { defaultKeys: "?", description: "Show Agents workspace help" },
+	"app.agents.nativeCommands": {
+		defaultKeys: "/",
+		description: "Return to native commands from Agents",
+	},
+	"app.agents.exitHost": { defaultKeys: "ctrl+c", description: "Exit the Agents host" },
+	"app.agents.terminalCopy": {
+		defaultKeys: "ctrl+shift+c",
+		description: "Preserve the terminal copy shortcut",
+	},
+	"app.agents.open1": { defaultKeys: "alt+1", description: "Open agent 1" },
+	"app.agents.open2": { defaultKeys: "alt+2", description: "Open agent 2" },
+	"app.agents.open3": { defaultKeys: "alt+3", description: "Open agent 3" },
+	"app.agents.open4": { defaultKeys: "alt+4", description: "Open agent 4" },
+	"app.agents.open5": { defaultKeys: "alt+5", description: "Open agent 5" },
+	"app.agents.open6": { defaultKeys: "alt+6", description: "Open agent 6" },
+	"app.agents.open7": { defaultKeys: "alt+7", description: "Open agent 7" },
+	"app.agents.open8": { defaultKeys: "alt+8", description: "Open agent 8" },
+	"app.agents.open9": { defaultKeys: "alt+9", description: "Open agent 9" },
 } as const satisfies KeybindingDefinitions;
 
 const KEYBINDING_NAME_MIGRATIONS = {

@@ -1,4 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LOCAL_BUILD_MARKER_FILENAME } from "../src/config.ts";
 import {
 	checkForNewPiVersion,
 	comparePackageVersions,
@@ -9,6 +13,8 @@ import {
 
 const originalSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
 const originalOffline = process.env.PI_OFFLINE;
+const originalPackageDir = process.env.PI_PACKAGE_DIR;
+let tempDir: string | undefined;
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -21,6 +27,15 @@ afterEach(() => {
 		delete process.env.PI_OFFLINE;
 	} else {
 		process.env.PI_OFFLINE = originalOffline;
+	}
+	if (originalPackageDir === undefined) {
+		delete process.env.PI_PACKAGE_DIR;
+	} else {
+		process.env.PI_PACKAGE_DIR = originalPackageDir;
+	}
+	if (tempDir) {
+		rmSync(tempDir, { recursive: true, force: true });
+		tempDir = undefined;
 	}
 });
 
@@ -86,6 +101,17 @@ describe("version checks", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiVersion("1.2.3")).resolves.toBeUndefined();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("skips registry checks for marked local builds", async () => {
+		tempDir = mkdtempSync(join(tmpdir(), "pi-local-version-check-"));
+		writeFileSync(join(tempDir, LOCAL_BUILD_MARKER_FILENAME), "local\n");
+		process.env.PI_PACKAGE_DIR = tempDir;
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(getLatestPiRelease("1.2.3")).resolves.toBeUndefined();
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

@@ -315,6 +315,7 @@ export class TUI extends Container {
 	private previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
 	private fullRedrawCount = 0;
 	private stopped = false;
+	private renderingPaused = false;
 	private pendingOsc11BackgroundReplies = 0;
 	private pendingOsc11BackgroundQueries: PendingOsc11BackgroundQuery[] = [];
 	private terminalColorSchemeListeners = new Set<(scheme: TerminalColorScheme) => void>();
@@ -646,6 +647,22 @@ export class TUI extends Container {
 		this.requestRender();
 	}
 
+	/** Defer rendering while keeping terminal input and capabilities active. */
+	pauseRendering(): void {
+		this.renderingPaused = true;
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = undefined;
+		}
+	}
+
+	/** Resume rendering and redraw the complete application surface. */
+	resumeRendering(): void {
+		if (!this.renderingPaused) return;
+		this.renderingPaused = false;
+		this.requestRender(true);
+	}
+
 	addInputListener(listener: InputListener): () => void {
 		this.inputListeners.add(listener);
 		return () => {
@@ -710,6 +727,10 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false): void {
+		if (this.renderingPaused) {
+			this.renderRequested = true;
+			return;
+		}
 		if (force) {
 			this.previousLines = [];
 			this.previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
@@ -724,7 +745,7 @@ export class TUI extends Container {
 			}
 			this.renderRequested = true;
 			process.nextTick(() => {
-				if (this.stopped || !this.renderRequested) {
+				if (this.stopped || this.renderingPaused || !this.renderRequested) {
 					return;
 				}
 				this.renderRequested = false;
@@ -739,14 +760,14 @@ export class TUI extends Container {
 	}
 
 	private scheduleRender(): void {
-		if (this.stopped || this.renderTimer || !this.renderRequested) {
+		if (this.stopped || this.renderingPaused || this.renderTimer || !this.renderRequested) {
 			return;
 		}
 		const elapsed = performance.now() - this.lastRenderAt;
 		const delay = Math.max(0, TUI.MIN_RENDER_INTERVAL_MS - elapsed);
 		this.renderTimer = setTimeout(() => {
 			this.renderTimer = undefined;
-			if (this.stopped || !this.renderRequested) {
+			if (this.stopped || this.renderingPaused || !this.renderRequested) {
 				return;
 			}
 			this.renderRequested = false;

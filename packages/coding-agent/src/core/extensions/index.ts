@@ -166,6 +166,7 @@ export type {
 	UserBashEventResult,
 	WidgetPlacement,
 	WorkingIndicatorOptions,
+	WorkspaceStartEvent,
 	WriteToolCallEvent,
 	WriteToolResultEvent,
 } from "./types.ts";

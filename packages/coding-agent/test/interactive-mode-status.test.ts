@@ -229,7 +229,7 @@ describe("InteractiveMode.showExtensionCustom", () => {
 		};
 		const showExtensionCustom = <T>(
 			factory: (tui: TUI, theme: unknown, keybindings: unknown, done: (result: T) => void) => Component,
-			options?: { overlay?: boolean },
+			options?: { overlay?: boolean; fullscreen?: boolean },
 		): Promise<T> =>
 			(InteractiveMode as any).prototype.showExtensionCustom.call(fakeThis, factory, options) as Promise<T>;
 
@@ -268,6 +268,61 @@ describe("InteractiveMode.showExtensionCustom", () => {
 
 			closeOverlay("closed");
 			await overlayPromise;
+		} finally {
+			ui.stop();
+		}
+	});
+
+	test("fullscreen custom UI owns the complete root and restores it on close", async () => {
+		const terminal = new VirtualTerminal(80, 24);
+		const ui = new TUI(terminal);
+		const editorContainer = new Container();
+		const header = new TestFocusableComponent("HEADER");
+		const editor = new TestFocusableComponent("EDITOR");
+		const footer = new TestFocusableComponent("FOOTER");
+		const workspace = new TestFocusableComponent("WORKSPACE");
+		let closeWorkspace: (value: string) => void = () => {
+			throw new Error("closeWorkspace was not initialized");
+		};
+		const fakeThis = {
+			editor,
+			editorContainer,
+			keybindings: {},
+			ui,
+		};
+
+		editorContainer.addChild(editor);
+		ui.addChild(header);
+		ui.addChild(editorContainer);
+		ui.addChild(footer);
+		ui.setFocus(editor);
+		ui.start();
+		try {
+			const workspacePromise = (InteractiveMode as any).prototype.showExtensionCustom.call(
+				fakeThis,
+				(_tui: TUI, _theme: unknown, _keybindings: unknown, done: (result: string) => void) => {
+					closeWorkspace = done;
+					return workspace;
+				},
+				{ fullscreen: true },
+			) as Promise<string>;
+			await flushTui(ui, terminal);
+
+			expect(ui.children).toEqual([workspace]);
+			expect(workspace.focused).toBe(true);
+			terminal.sendInput("x");
+			await flushTui(ui, terminal);
+			expect(workspace.inputs).toEqual(["x"]);
+			expect(editor.inputs).toEqual([]);
+
+			closeWorkspace("closed");
+			await expect(workspacePromise).resolves.toBe("closed");
+			await flushTui(ui, terminal);
+			expect(ui.children).toEqual([header, editorContainer, footer]);
+			expect(editor.focused).toBe(true);
+			terminal.sendInput("y");
+			await flushTui(ui, terminal);
+			expect(editor.inputs).toEqual(["y"]);
 		} finally {
 			ui.stop();
 		}

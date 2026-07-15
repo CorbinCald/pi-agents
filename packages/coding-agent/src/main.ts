@@ -43,6 +43,7 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
+import agentsExtension from "./modes/interactive/agents/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
@@ -536,6 +537,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
+	const startExtensionWorkspace = appMode === "interactive" && args.length === 0;
 	const shouldTakeOverStdout = appMode !== "interactive" && !isPlainRuntimeMetadataCommand(parsed);
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
@@ -670,10 +672,17 @@ export async function main(args: string[], options?: MainOptions) {
 				noContextFiles: parsed.noContextFiles,
 				systemPrompt: parsed.systemPrompt,
 				appendSystemPrompt: parsed.appendSystemPrompt,
-				extensionFactories: options?.extensionFactories,
+				extensionFactories: [{ name: "agents", factory: agentsExtension }, ...(options?.extensionFactories ?? [])],
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		const hasStartupWorkspace = resourceLoader
+			.getExtensions()
+			.extensions.some((extension) => (extension.handlers.get("workspace_start")?.length ?? 0) > 0);
+		const activeSessionManager =
+			isInitialRuntime && startExtensionWorkspace && hasStartupWorkspace
+				? SessionManager.inMemory(cwd)
+				: sessionManager;
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,
 			...services.diagnostics,
@@ -694,7 +703,7 @@ export async function main(args: string[], options?: MainOptions) {
 		} = buildSessionOptions(
 			parsed,
 			scopedModels,
-			sessionManager.buildSessionContext().messages.length > 0,
+			activeSessionManager.buildSessionContext().messages.length > 0,
 			modelRuntime,
 			settingsManager,
 		);
@@ -714,7 +723,7 @@ export async function main(args: string[], options?: MainOptions) {
 
 		const created = await createAgentSessionFromServices({
 			services,
-			sessionManager,
+			sessionManager: activeSessionManager,
 			sessionStartEvent,
 			model: sessionOptions.model,
 			thinkingLevel: sessionOptions.thinkingLevel,
@@ -817,6 +826,7 @@ export async function main(args: string[], options?: MainOptions) {
 			initialMessage,
 			initialImages,
 			initialMessages: parsed.messages,
+			startExtensionWorkspace,
 			verbose: parsed.verbose,
 		});
 		if (startupBenchmark) {

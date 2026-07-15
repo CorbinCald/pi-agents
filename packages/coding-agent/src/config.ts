@@ -9,6 +9,8 @@ import { normalizePath } from "./utils/paths.ts";
 // Package Detection
 // =============================================================================
 
+export const LOCAL_BUILD_MARKER_FILENAME = ".pi-local-build";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -317,6 +319,7 @@ export function getSelfUpdateCommand(
 	npmCommand?: string[],
 	updatePackageTarget: SelfUpdatePackageTarget = packageName,
 ): SelfUpdateCommand | undefined {
+	if (isLocalBuild()) return undefined;
 	const method = detectInstallMethod();
 	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageTarget, npmCommand);
 	if (!command || !isManagedByGlobalPackageManager(method, packageName, npmCommand) || !isSelfUpdatePathWritable()) {
@@ -330,6 +333,9 @@ export function getSelfUpdateUnavailableInstruction(
 	npmCommand?: string[],
 	updatePackageTarget: SelfUpdatePackageTarget = packageName,
 ): string {
+	if (isLocalBuild()) {
+		return "Registry self-update is disabled for this local build. Rebuild and reinstall it from its source checkout.";
+	}
 	const method = detectInstallMethod();
 	const target = normalizeSelfUpdatePackageTarget(updatePackageTarget);
 	if (method === "bun-binary") {
@@ -385,6 +391,11 @@ export function getPackageDir(): string {
 	}
 	// Fallback (shouldn't happen)
 	return __dirname;
+}
+
+/** Whether this installation is protected from registry-driven updates. */
+export function isLocalBuild(): boolean {
+	return existsSync(join(getPackageDir(), LOCAL_BUILD_MARKER_FILENAME));
 }
 
 /**

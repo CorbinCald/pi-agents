@@ -39,6 +39,8 @@ pi update --extension npm:@foo/bar
 
 These commands manage pi packages and `pi update` can update the pi CLI installation. To uninstall pi itself, see [Quickstart](quickstart.md#uninstall).
 
+Local release installs produced by `npm run release:local` carry a `.pi-local-build` marker beside the package manifest or standalone executable. Marked builds do not contact the registry version endpoint and reject `pi update`, `pi update --self`, and `pi update --all` before changing anything. Use `pi update --extensions` to update packages without replacing the local Pi build. Published packages and release binaries do not carry this marker and retain normal self-update behavior.
+
 By default, `install` and `remove` write to user settings (`~/.pi/agent/settings.json`). Use `-l` to write to project settings (`.pi/settings.json`) instead. Project settings can be shared with your team, and pi installs any missing packages automatically on startup after the project is trusted.
 
 To try a package without installing it, use `--extension` or `-e`. This installs to a temporary directory for the current run only:

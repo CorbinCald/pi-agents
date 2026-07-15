@@ -106,6 +106,19 @@ async execute(toolCallId, params, onUpdate, ctx, signal) {
 }
 ```
 
+## Fullscreen Components
+
+Pass `{ fullscreen: true }` to `ctx.ui.custom()` when one component should own the complete terminal surface rather than only replacing the editor. Pi saves the current root components, focuses the fullscreen component, and restores the original root and editor focus when `done()` is called.
+
+```typescript
+const result = await ctx.ui.custom<string>(
+  (tui, theme, keybindings, done) => new Workspace(tui, theme, keybindings, done),
+  { fullscreen: true },
+);
+```
+
+Fullscreen and overlay modes are mutually exclusive. A fullscreen component can use `tui.stop()` and `tui.start()` to hand terminal ownership to another interactive process temporarily; restart the same TUI and request a forced render before returning control to the component.
+
 ## Overlays
 
 Overlays render components on top of existing content without clearing the screen. Pass `{ overlay: true }` to `ctx.ui.custom()`:
