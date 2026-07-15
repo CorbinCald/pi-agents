@@ -72,7 +72,7 @@ pi remove git:github.com/CorbinCald/pi-agents
 
 Each agent is one persistent interactive Pi process, not a transcript emulation or parallel session UI. On attach, the host UI stops and the terminal is handed directly to that Pi process. Native slash commands, `/new`, `/resume`, model controls, bash mode, external editor support, custom extensions, configured keybindings, and normal Pi shortcuts remain available; Agents only claims Left Arrow when the editor is empty.
 
-Typing `/` in an empty Agents workspace returns immediately to Pi's native slash-command editor. `Shift+Tab` in the workspace changes the reasoning effort used for newly dispatched sessions.
+Typing `/` in an empty Agents workspace returns immediately to Pi's native slash-command editor. `Shift+Tab` changes the reasoning effort in both the workspace and native attached sessions. Direct OpenAI GPT-5.6 Responses models add **Max Pro** after **max**; it combines `reasoning.effort: "max"` with `reasoning.mode: "pro"` and is hidden for every other model.
 
 ### Workspace controls
 
@@ -87,7 +87,7 @@ Press `?` in the workspace to show the current controls.
 | `Ctrl+T` | Pin or unpin |
 | `Ctrl+R` | Rename |
 | `Shift+Up` / `Shift+Down` | Reorder |
-| `Shift+Tab` | Cycle dispatch reasoning effort |
+| `Shift+Tab` | Cycle dispatch reasoning effort (including **Max Pro** on supported GPT-5.6 models) |
 | `Ctrl+X` | Stop; press again within two seconds to delete |
 | `/` | Return to native Pi slash commands |
 | `Ctrl+C` | Exit the host Pi; persistent agents keep running |

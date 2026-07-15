@@ -373,6 +373,130 @@ test("idle cleanup never stops a pending or attached terminal", {
 	assert.equal(supervisorError, "");
 });
 
+test("supervisor launches supported GPT-5.6 workers with max Pro reasoning", {
+	timeout: 15_000,
+}, async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-agents-max-pro-test-"));
+	const workspace = join(root, "workspace");
+	const agentsRoot = join(root, "agents");
+	mkdirSync(workspace);
+
+	const supervisor = spawn(process.execPath, [supervisorPath], {
+		env: {
+			...process.env,
+			PI_AGENTS_ROOT: agentsRoot,
+			PI_AGENTS_PI_INVOCATION: JSON.stringify({
+				command: process.execPath,
+				argsPrefix: [fakePiPath],
+			}),
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let supervisorError = "";
+	supervisor.stderr.on(
+		"data",
+		(chunk) => (supervisorError += chunk.toString()),
+	);
+
+	const socketPath = join(agentsRoot, "supervisor.sock");
+	await waitFor(() => existsSync(socketPath));
+	const client = await connect(socketPath);
+	let terminalServer;
+
+	try {
+		assert.equal((await client.request("ping")).protocolVersion, 3);
+		await assert.rejects(
+			client.request("dispatch", {
+				prompt: "reject unsupported Pro mode",
+				cwd: workspace,
+				model: { provider: "openai-codex", id: "gpt-5.6-sol" },
+				thinkingLevel: "max",
+				reasoningMode: "pro",
+				projectTrusted: true,
+			}),
+			/direct OpenAI GPT-5\.6/i,
+		);
+
+		const dispatched = await client.request("dispatch", {
+			prompt: "verify max Pro launch",
+			cwd: workspace,
+			model: { provider: "openai", id: "gpt-5.6-sol" },
+			thinkingLevel: "max",
+			reasoningMode: "pro",
+			projectTrusted: true,
+		});
+		terminalServer = dispatched.terminalServer;
+		assert.equal(dispatched.thinkingLevel, "max");
+		assert.equal(dispatched.reasoningMode, "pro");
+
+		const launchPath = join(workspace, `launch-${dispatched.id}.json`);
+		await waitFor(() => existsSync(launchPath));
+		const launch = JSON.parse(readFileSync(launchPath, "utf8"));
+		assert.equal(launch.reasoningMode, "pro");
+		assert.deepEqual(
+			launch.args.slice(
+				launch.args.indexOf("--thinking"),
+				launch.args.indexOf("--thinking") + 2,
+			),
+			["--thinking", "max"],
+		);
+
+		const workerPid = Number(
+			execFileSync(
+				"tmux",
+				[
+					"-L",
+					dispatched.terminalServer,
+					"display-message",
+					"-p",
+					"-t",
+					dispatched.terminalSession,
+					"#{pane_pid}",
+				],
+				{ encoding: "utf8" },
+			).trim(),
+		);
+		const standard = await client.request("worker_event", {
+			jobId: dispatched.id,
+			workerPid,
+			eventType: "reasoning_mode_select",
+			data: { mode: null },
+		});
+		assert.equal(standard.reasoningMode, undefined);
+		const maxPro = await client.request("worker_event", {
+			jobId: dispatched.id,
+			workerPid,
+			eventType: "reasoning_mode_select",
+			data: { mode: "pro" },
+		});
+		assert.equal(maxPro.reasoningMode, "pro");
+
+		const persisted = JSON.parse(
+			readFileSync(
+				join(agentsRoot, "jobs", dispatched.id, "state.json"),
+				"utf8",
+			),
+		);
+		assert.equal(persisted.reasoningMode, "pro");
+		await client.request("remove", { jobId: dispatched.id });
+	} finally {
+		client.close();
+		if (terminalServer) {
+			try {
+				execFileSync("tmux", ["-L", terminalServer, "kill-server"], {
+					stdio: "ignore",
+				});
+			} catch {
+				// Removing the final native session normally stops the private server.
+			}
+		}
+		await stopProcess(supervisor);
+		rmSync(root, { recursive: true, force: true });
+	}
+
+	assert.equal(supervisorError, "");
+});
+
 test("supervisor runs concurrent isolated sessions, recaps them, and cleans up worktrees", {
 	timeout: 30_000,
 }, async () => {

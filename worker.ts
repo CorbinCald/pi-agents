@@ -10,6 +10,11 @@ import { Container, matchesKey, Text } from "@earendil-works/pi-tui";
 import { SupervisorClient } from "./client.ts";
 import { installAgentsNavigationEditor } from "./editor.ts";
 import { installSinglePressExit } from "./exit.ts";
+import {
+	DispatchReasoningController,
+	supportsMaxProReasoning,
+	withMaxProReasoning,
+} from "./reasoning.ts";
 import type { AgentRecord, SupervisorEvent } from "./types.ts";
 
 const JOB_ID = process.env.PI_AGENT_JOB_ID;
@@ -17,6 +22,7 @@ const TMUX_SERVER = process.env.PI_AGENTS_TMUX_SERVER;
 const CONTEXT_WIDGET = "agents-context";
 const RECAP_WIDGET = "agents-recap";
 const STATUS_KEY = "agents-worker";
+const REASONING_STATUS_KEY = "agents-reasoning";
 
 function messageText(content: unknown): string {
 	if (typeof content === "string") return content;
@@ -114,6 +120,13 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 	let unsubscribeExit: (() => void) | undefined;
 	let reconnectTimer: ReturnType<typeof setInterval> | undefined;
 	let applyingName = false;
+	const reasoning = new DispatchReasoningController(
+		{
+			getThinkingLevel: () => pi.getThinkingLevel(),
+			setThinkingLevel: (level) => pi.setThinkingLevel(level),
+		},
+		() => context?.model,
+	);
 
 	const getClient = () => {
 		client ??= new SupervisorClient();
@@ -168,8 +181,10 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 		try {
 			const job = await getClient().workerEvent(JOB_ID, eventType, data);
 			applyJobState(job);
+			return job;
 		} catch {
 			// The native Pi session remains usable if the supervisor is restarting.
+			return undefined;
 		}
 	};
 
@@ -177,6 +192,26 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 		if (event.event === "state" && event.job?.id === JOB_ID) {
 			applyJobState(event.job);
 		}
+	};
+
+	const updateReasoningStatus = () => {
+		const ctx = context;
+		if (!ctx) return;
+		const maxPro = reasoning.getSelection().reasoningMode === "pro";
+		ctx.ui.setStatus(
+			REASONING_STATUS_KEY,
+			maxPro ? ctx.ui.theme.fg("accent", "Max Pro") : undefined,
+		);
+	};
+
+	const cycleNativeReasoning = () => {
+		const selection = reasoning.cycleMaxProBoundary();
+		if (!selection) return false;
+		updateReasoningStatus();
+		void sendEvent("reasoning_mode_select", {
+			mode: selection.reasoningMode ?? null,
+		});
+		return true;
 	};
 
 	pi.registerShortcut("alt+c", {
@@ -197,6 +232,7 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 			ctx,
 			(tui, theme, keybindings) => new CustomEditor(tui, theme, keybindings),
 			() => detachClient(),
+			cycleNativeReasoning,
 		);
 
 		const monitor = getClient();
@@ -207,7 +243,7 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 		reconnectTimer.unref?.();
 		try {
 			await monitor.connect(false);
-			await sendEvent("session_start", {
+			const started = await sendEvent("session_start", {
 				sessionFile: ctx.sessionManager.getSessionFile(),
 				sessionId: ctx.sessionManager.getSessionId(),
 				cwd: ctx.cwd,
@@ -217,6 +253,14 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 				thinkingLevel: pi.getThinkingLevel(),
 				name: pi.getSessionName(),
 			});
+			if (
+				started?.reasoningMode === "pro" &&
+				pi.getThinkingLevel() === "max" &&
+				supportsMaxProReasoning(ctx.model)
+			) {
+				reasoning.cycleMaxProBoundary();
+			}
+			updateReasoningStatus();
 		} catch {
 			ctx.ui.setStatus(
 				STATUS_KEY,
@@ -226,6 +270,16 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 				),
 			);
 		}
+	});
+
+	pi.on("before_provider_request", (event, ctx) => {
+		if (
+			reasoning.getSelection().reasoningMode !== "pro" ||
+			!supportsMaxProReasoning(ctx.model)
+		) {
+			return;
+		}
+		return withMaxProReasoning(event.payload);
 	});
 
 	pi.on("agent_start", async () => {
@@ -254,12 +308,14 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 	});
 
 	pi.on("model_select", async (event) => {
+		updateReasoningStatus();
 		await sendEvent("model_select", {
 			model: { provider: event.model.provider, id: event.model.id },
 		});
 	});
 
 	pi.on("thinking_level_select", async (event) => {
+		updateReasoningStatus();
 		await sendEvent("thinking_level_select", { level: event.level });
 	});
 
@@ -270,6 +326,7 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async (event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		ctx.ui.setStatus(REASONING_STATUS_KEY, undefined);
 		ctx.ui.setWidget(CONTEXT_WIDGET, undefined);
 		ctx.ui.setWidget(RECAP_WIDGET, undefined);
 		if (event.reason === "quit")

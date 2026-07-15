@@ -25,6 +25,7 @@ export interface AgentRecord {
 	cwd: string;
 	model: { provider: string; id: string };
 	thinkingLevel: string;
+	reasoningMode?: "pro";
 	status: AgentStatus;
 	summary: string;
 	recap?: string;
@@ -53,6 +54,7 @@ export interface DispatchRequest {
 	cwd: string;
 	model: { provider: string; id: string };
 	thinkingLevel: string;
+	reasoningMode?: "pro";
 	projectTrusted: boolean;
 }
 

@@ -21,6 +21,7 @@ import net from "node:net";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { ensurePiCompactionUiPatch } from "./pi-compat.js";
+import { supportsMaxProReasoning } from "./reasoning.ts";
 
 const ROOT =
 	process.env.PI_AGENTS_ROOT ||
@@ -33,6 +34,7 @@ const SESSIONS_DIR = join(ROOT, "sessions");
 const WORKTREES_DIR = join(ROOT, "worktrees");
 const RECAP_MODEL = "openai/gpt-5.6-luna";
 const RECAP_THINKING = "medium";
+const PROTOCOL_VERSION = 3;
 const MAX_RECAP_INPUT_CHARS = 48_000;
 const MAX_EVENT_TEXT_CHARS = 24_000;
 const RECAP_TIMEOUT_MS = 180_000;
@@ -206,6 +208,13 @@ function loadJobs() {
 			delete parsed.pendingUi;
 			delete parsed.terminalStopping;
 			if (!AGENT_COLORS.has(parsed.labelColor)) delete parsed.labelColor;
+			if (
+				parsed.reasoningMode !== "pro" ||
+				parsed.thinkingLevel !== "max" ||
+				!supportsMaxProReasoning(parsed.model)
+			) {
+				delete parsed.reasoningMode;
+			}
 			parsed.isRunning = false;
 			parsed.isStreaming = false;
 			if (parsed.status === "working") {
@@ -422,6 +431,7 @@ function terminalLaunchCommand(job, initialPrompt) {
 		PI_AGENTS_ROOT: ROOT,
 		PI_AGENTS_TMUX_SERVER: TMUX_SERVER,
 		PI_AGENTS_TMUX_SESSION: job.terminalSession,
+		...(job.reasoningMode === "pro" ? { PI_AGENTS_REASONING_MODE: "pro" } : {}),
 	};
 	const envArgs = Object.entries(environment).map(
 		([key, value]) => `${key}=${shellQuote(value)}`,
@@ -715,14 +725,28 @@ function handleTerminalWorkerEvent(job, eventType, data = {}) {
 				typeof data.model.id === "string"
 			) {
 				job.model = data.model;
+				if (!supportsMaxProReasoning(job.model)) delete job.reasoningMode;
 				emitState(job);
 			}
 			break;
 		case "thinking_level_select":
 			if (typeof data.level === "string") {
 				job.thinkingLevel = data.level;
+				if (data.level !== "max") delete job.reasoningMode;
 				emitState(job);
 			}
+			break;
+		case "reasoning_mode_select":
+			if (
+				data.mode === "pro" &&
+				job.thinkingLevel === "max" &&
+				supportsMaxProReasoning(job.model)
+			) {
+				job.reasoningMode = "pro";
+			} else {
+				delete job.reasoningMode;
+			}
+			emitState(job);
 			break;
 		case "session_info_changed":
 			if (typeof data.name === "string" && data.name.trim()) {
@@ -1001,6 +1025,17 @@ async function dispatchJob(request) {
 	if (!existsSync(originalCwd) || !statSync(originalCwd).isDirectory()) {
 		throw new Error(`Working directory does not exist: ${originalCwd}`);
 	}
+	if (request.reasoningMode !== undefined && request.reasoningMode !== "pro") {
+		throw new Error(`Unknown reasoning mode: ${request.reasoningMode}`);
+	}
+	if (
+		request.reasoningMode === "pro" &&
+		(request.thinkingLevel !== "max" || !supportsMaxProReasoning(request.model))
+	) {
+		throw new Error(
+			"Max Pro reasoning requires max effort on a direct OpenAI GPT-5.6 model",
+		);
+	}
 
 	let id;
 	do id = randomUUID().replace(/-/g, "").slice(0, 8);
@@ -1017,6 +1052,7 @@ async function dispatchJob(request) {
 		cwd: originalCwd,
 		model: request.model,
 		thinkingLevel: request.thinkingLevel || "medium",
+		...(request.reasoningMode === "pro" ? { reasoningMode: "pro" } : {}),
 		projectTrusted: Boolean(request.projectTrusted),
 		status: "working",
 		summary: "Creating isolated worktree…",
@@ -1153,7 +1189,11 @@ async function handleRequest(message) {
 			await removeJob(requiredJob(message.jobId));
 			return undefined;
 		case "ping":
-			return { pid: process.pid, jobs: jobs.size };
+			return {
+				pid: process.pid,
+				jobs: jobs.size,
+				protocolVersion: PROTOCOL_VERSION,
+			};
 		default:
 			throw new Error(`Unknown supervisor request: ${message.type}`);
 	}

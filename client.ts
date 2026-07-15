@@ -21,6 +21,7 @@ const SUPERVISOR_PATH = fileURLToPath(
 const CONNECT_TIMEOUT_MS = 7_500;
 const REQUEST_TIMEOUT_MS = 120_000;
 const SUPERVISOR_UPGRADE_TIMEOUT_MS = 5_000;
+const MIN_MAX_PRO_PROTOCOL_VERSION = 3;
 
 type Listener = (event: SupervisorEvent) => void;
 type PendingRequest = {
@@ -194,9 +195,12 @@ export class SupervisorClient {
 		this.buffer = "";
 		this.decoder = new StringDecoder("utf8");
 		socket.on("data", (chunk) => this.readChunk(chunk));
-		socket.on("error", (error) => this.handleDisconnect(error));
+		socket.on("error", (error) => this.handleDisconnect(socket, error));
 		socket.on("close", () =>
-			this.handleDisconnect(new Error("Agents supervisor disconnected")),
+			this.handleDisconnect(
+				socket,
+				new Error("Agents supervisor disconnected"),
+			),
 		);
 	}
 
@@ -243,8 +247,8 @@ export class SupervisorClient {
 		}
 	}
 
-	private handleDisconnect(error: Error): void {
-		if (!this.socket) return;
+	private handleDisconnect(socket: net.Socket, error: Error): void {
+		if (this.socket !== socket) return;
 		this.socket = undefined;
 		for (const [id, pending] of this.pending) {
 			clearTimeout(pending.timer);
@@ -289,7 +293,19 @@ export class SupervisorClient {
 		return this.request("list");
 	}
 
-	dispatch(options: DispatchRequest): Promise<AgentRecord> {
+	private async ensureMaxProSupervisor(): Promise<void> {
+		const status = await this.request<{ protocolVersion?: unknown }>("ping");
+		if (
+			typeof status.protocolVersion === "number" &&
+			status.protocolVersion >= MIN_MAX_PRO_PROTOCOL_VERSION
+		) {
+			return;
+		}
+		await this.restartOutdatedSupervisor();
+	}
+
+	async dispatch(options: DispatchRequest): Promise<AgentRecord> {
+		if (options.reasoningMode === "pro") await this.ensureMaxProSupervisor();
 		return this.request(
 			"dispatch",
 			options as unknown as Record<string, unknown>,

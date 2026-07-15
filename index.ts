@@ -8,20 +8,17 @@ import { SupervisorClient } from "./client.ts";
 import { installAgentsNavigationEditor } from "./editor.ts";
 import { installSinglePressExit, requestSinglePressExit } from "./exit.ts";
 import { ensureCurrentPiCompactionUiPatch } from "./pi-compat.js";
+import {
+	DispatchReasoningController,
+	supportsMaxProReasoning,
+	withMaxProReasoning,
+} from "./reasoning.ts";
 import { attachAgentTerminal } from "./terminal.ts";
 import type { AgentRecord, SupervisorEvent } from "./types.ts";
 import { showAgentView } from "./ui.ts";
 import { registerWorkerIntegration } from "./worker.ts";
 
-const THINKING_LEVELS = [
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-] as const;
+const REASONING_STATUS_KEY = "agents-reasoning";
 
 export default function agentsExtension(pi: ExtensionAPI): void {
 	if (process.env.PI_AGENTS_RECAP === "1") return;
@@ -46,6 +43,30 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 	let unsubscribeExit: (() => void) | undefined;
 	const knownJobs = new Map<string, AgentRecord>();
 	const previousStatuses = new Map<string, string>();
+	const dispatchReasoning = new DispatchReasoningController(
+		{
+			getThinkingLevel: () => pi.getThinkingLevel(),
+			setThinkingLevel: (level) => pi.setThinkingLevel(level),
+		},
+		() => activeContext?.model,
+	);
+
+	const updateReasoningStatus = () => {
+		const context = activeContext;
+		if (!context) return;
+		const maxPro = dispatchReasoning.getSelection().reasoningMode === "pro";
+		context.ui.setStatus(
+			REASONING_STATUS_KEY,
+			maxPro ? context.ui.theme.fg("accent", "Max Pro") : undefined,
+		);
+	};
+
+	const cycleNativeReasoning = () => {
+		const selection = dispatchReasoning.cycleMaxProBoundary();
+		if (!selection) return false;
+		updateReasoningStatus();
+		return true;
+	};
 
 	const getClient = () => {
 		if (!client) {
@@ -122,20 +143,6 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	const cycleThinkingLevel = () => {
-		const current = pi.getThinkingLevel();
-		const currentIndex = Math.max(0, THINKING_LEVELS.indexOf(current));
-		for (let offset = 1; offset <= THINKING_LEVELS.length; offset++) {
-			const candidate =
-				THINKING_LEVELS[(currentIndex + offset) % THINKING_LEVELS.length];
-			if (!candidate) continue;
-			pi.setThinkingLevel(candidate);
-			const selected = pi.getThinkingLevel();
-			if (selected !== current) return selected;
-		}
-		return current;
-	};
-
 	const open = async (context: ExtensionContext) => {
 		if (viewOpen) return;
 		if (context.mode !== "tui") {
@@ -154,8 +161,12 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 					provider: context.model.provider,
 					id: context.model.id,
 				},
-				getThinkingLevel: () => pi.getThinkingLevel(),
-				cycleThinkingLevel,
+				getReasoning: () => dispatchReasoning.getSelection(),
+				cycleReasoning: () => {
+					const selection = dispatchReasoning.cycle();
+					updateReasoningStatus();
+					return selection;
+				},
 				projectTrusted: context.isProjectTrusted(),
 				exit: () => requestSinglePressExit(context),
 				attach: (tui, jobId) => attachAgentTerminal(tui, getClient(), jobId),
@@ -175,14 +186,29 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 		handler: async (_args, context) => open(context),
 	});
 
+	pi.on("before_provider_request", (event, context) => {
+		if (
+			dispatchReasoning.getSelection().reasoningMode !== "pro" ||
+			!supportsMaxProReasoning(context.model)
+		) {
+			return;
+		}
+		return withMaxProReasoning(event.payload);
+	});
+
+	pi.on("model_select", () => updateReasoningStatus());
+	pi.on("thinking_level_select", () => updateReasoningStatus());
+
 	pi.on("session_start", async (_event, context) => {
 		activeContext = context;
+		updateReasoningStatus();
 		unsubscribeExit?.();
 		unsubscribeExit = installSinglePressExit(context, matchesKey);
 		installAgentsNavigationEditor(
 			context,
 			(tui, theme, keybindings) => new CustomEditor(tui, theme, keybindings),
 			(editor) => editor.submitCommand("/agents"),
+			cycleNativeReasoning,
 		);
 
 		const monitor = getClient();
@@ -200,6 +226,7 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", (_event, context) => {
 		context.ui.setStatus("agents", undefined);
+		context.ui.setStatus(REASONING_STATUS_KEY, undefined);
 		activeContext = undefined;
 		unsubscribeMonitor?.();
 		unsubscribeMonitor = undefined;

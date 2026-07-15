@@ -18,6 +18,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { SupervisorClient } from "./client.ts";
 import { isPlainCtrlC } from "./exit.ts";
+import type { DispatchReasoningSelection } from "./reasoning.ts";
 import {
 	AGENT_COLORS,
 	type AgentColor,
@@ -74,8 +75,8 @@ export type AgentViewResult =
 export interface AgentViewOptions {
 	cwd: string;
 	model: { provider: string; id: string };
-	getThinkingLevel: () => string;
-	cycleThinkingLevel: () => string;
+	getReasoning: () => DispatchReasoningSelection;
+	cycleReasoning: () => DispatchReasoningSelection;
 	projectTrusted: boolean;
 	exit: () => void;
 	attach: (tui: TUI, jobId: string) => Promise<TerminalAttachmentResult>;
@@ -267,11 +268,13 @@ class AgentViewComponent implements Component, Focusable {
 		this.promptEditor.addToHistory(prompt);
 		this.promptEditor.setText("");
 		this.runAction(async () => {
+			const reasoning = this.options.getReasoning();
 			const job = await this.client.dispatch({
 				prompt,
 				cwd: this.options.cwd,
 				model: this.options.model,
-				thinkingLevel: this.options.getThinkingLevel(),
+				thinkingLevel: reasoning.thinkingLevel,
+				reasoningMode: reasoning.reasoningMode,
 				projectTrusted: this.options.projectTrusted,
 			});
 			this.jobs.set(job.id, job);
@@ -432,7 +435,7 @@ class AgentViewComponent implements Component, Focusable {
 			return;
 		}
 		if (this.keybindings.matches(data, "app.thinking.cycle")) {
-			this.options.cycleThinkingLevel();
+			this.options.cycleReasoning();
 			this.tui.requestRender();
 			return;
 		}
@@ -524,6 +527,7 @@ class AgentViewComponent implements Component, Focusable {
 
 	private renderList(width: number): string[] {
 		this.ensureSelection();
+		const reasoning = this.options.getReasoning();
 		const height = this.targetHeight();
 		const jobs = this.orderedJobs();
 		const counts = Object.fromEntries(
@@ -537,7 +541,7 @@ class AgentViewComponent implements Component, Focusable {
 			` ${this.theme.bold(this.theme.fg("accent", "Agents"))}`,
 			this.theme.fg(
 				"muted",
-				` ${this.options.model.provider}/${this.options.model.id} (${this.options.getThinkingLevel()}) · ${shortPath(this.options.cwd)}`,
+				` ${this.options.model.provider}/${this.options.model.id} (${reasoning.label}) · ${shortPath(this.options.cwd)}`,
 			),
 			this.theme.fg(
 				"dim",

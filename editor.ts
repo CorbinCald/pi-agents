@@ -36,6 +36,7 @@ class AgentsNavigationEditor implements EditorComponent {
 		private readonly base: EditorComponent,
 		private readonly keybindings: KeybindingsManager,
 		private readonly onEmptyLeft: () => void,
+		private readonly onThinkingCycle?: () => boolean,
 		private readonly onSuspend?: () => void,
 	) {
 		const appAware = this.getAppAwareBase();
@@ -106,6 +107,12 @@ class AgentsNavigationEditor implements EditorComponent {
 	}
 
 	handleInput(data: string): void {
+		if (
+			this.keybindings.matches(data, "app.thinking.cycle") &&
+			this.onThinkingCycle?.()
+		) {
+			return;
+		}
 		if (this.onSuspend && this.keybindings.matches(data, "app.suspend")) {
 			this.onSuspend();
 			return;
@@ -221,6 +228,7 @@ export function installAgentsNavigationEditor(
 		keybindings: KeybindingsManager,
 	) => EditorComponent,
 	onEmptyLeft: (editor: AgentsNavigationEditor) => void,
+	onThinkingCycle?: () => boolean,
 	onSuspend?: () => void,
 ): void {
 	const previousFactory = context.ui.getEditorComponent();
@@ -233,6 +241,7 @@ export function installAgentsNavigationEditor(
 			base,
 			keybindings,
 			() => onEmptyLeft(editor),
+			onThinkingCycle,
 			onSuspend,
 		);
 		return editor;

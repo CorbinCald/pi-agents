@@ -62,6 +62,21 @@ if (args.includes("-p")) {
 			`${JSON.stringify({ type: "session", version: 3, id: sessionId, cwd: process.cwd() })}\n`,
 		);
 	}
+	const selectedModel = arg("--model") || "fake/fake";
+	const modelSeparator = selectedModel.indexOf("/");
+	const model = {
+		provider:
+			modelSeparator < 0 ? "fake" : selectedModel.slice(0, modelSeparator),
+		id:
+			modelSeparator < 0
+				? selectedModel
+				: selectedModel.slice(modelSeparator + 1),
+	};
+	const thinkingLevel = arg("--thinking") || "medium";
+	writeFileSync(
+		join(process.cwd(), `launch-${process.env.PI_AGENT_JOB_ID}.json`),
+		`${JSON.stringify({ args, reasoningMode: process.env.PI_AGENTS_REASONING_MODE })}\n`,
+	);
 	let counter = readFileSync(sessionFile, "utf8")
 		.split("\n")
 		.filter(Boolean).length;
@@ -146,8 +161,8 @@ if (args.includes("-p")) {
 			sessionFile,
 			sessionId,
 			cwd: process.cwd(),
-			model: { provider: "fake", id: "fake" },
-			thinkingLevel: "medium",
+			model,
+			thinkingLevel,
 		});
 		const initialPrompt = args.at(-1);
 		if (initialPrompt && !initialPrompt.startsWith("--")) {
