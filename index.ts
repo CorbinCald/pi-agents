@@ -3,8 +3,10 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { matchesKey } from "@earendil-works/pi-tui";
 import { SupervisorClient } from "./client.ts";
 import { installAgentsNavigationEditor } from "./editor.ts";
+import { installSinglePressExit, requestSinglePressExit } from "./exit.ts";
 import { ensureCurrentPiCompactionUiPatch } from "./pi-compat.js";
 import { attachAgentTerminal } from "./terminal.ts";
 import type { AgentRecord, SupervisorEvent } from "./types.ts";
@@ -41,6 +43,7 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 	let activeContext: ExtensionContext | undefined;
 	let viewOpen = false;
 	let unsubscribeMonitor: (() => void) | undefined;
+	let unsubscribeExit: (() => void) | undefined;
 	const knownJobs = new Map<string, AgentRecord>();
 	const previousStatuses = new Map<string, string>();
 
@@ -154,6 +157,7 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 				getThinkingLevel: () => pi.getThinkingLevel(),
 				cycleThinkingLevel,
 				projectTrusted: context.isProjectTrusted(),
+				exit: () => requestSinglePressExit(context),
 				attach: (tui, jobId) => attachAgentTerminal(tui, getClient(), jobId),
 			});
 		} catch (error) {
@@ -173,6 +177,8 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, context) => {
 		activeContext = context;
+		unsubscribeExit?.();
+		unsubscribeExit = installSinglePressExit(context, matchesKey);
 		installAgentsNavigationEditor(
 			context,
 			(tui, theme, keybindings) => new CustomEditor(tui, theme, keybindings),
@@ -197,6 +203,8 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 		activeContext = undefined;
 		unsubscribeMonitor?.();
 		unsubscribeMonitor = undefined;
+		unsubscribeExit?.();
+		unsubscribeExit = undefined;
 		client?.close();
 		client = undefined;
 		knownJobs.clear();

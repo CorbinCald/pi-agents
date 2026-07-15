@@ -2,10 +2,14 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { SupervisorClient } from "./client.ts";
+import type { TerminalAttachmentResult } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
 const RESIZE_REDRAW_POLL_MS = 20;
 const RESIZE_REDRAW_TIMEOUT_MS = 1_000;
+// A dedicated tmux client status distinguishes "exit host Pi" from detaching.
+const ATTACHED_EXIT_CODE = 79;
+const CTRL_SHIFT_C_SEQUENCE = "\u001b[99;6u";
 const PRINTABLE_TMUX_KEYS = [
 	"Space",
 	...Array.from({ length: 94 }, (_, index) =>
@@ -208,6 +212,66 @@ async function configureCopyMode(
 	}
 }
 
+async function configureSinglePressExit(
+	server: string,
+	environment: NodeJS.ProcessEnv,
+): Promise<void> {
+	// Replacing only the attached client avoids signaling or stopping the
+	// persistent worker. The host observes its status and shuts itself down.
+	for (const table of ["root", "copy-mode", "copy-mode-vi"]) {
+		await execFileAsync(
+			"tmux",
+			[
+				"-L",
+				server,
+				"bind-key",
+				"-T",
+				table,
+				"C-c",
+				"detach-client",
+				"-E",
+				`exit ${ATTACHED_EXIT_CODE}`,
+			],
+			{ env: environment },
+		);
+	}
+	// tmux falls back from C-S-c to a C-c binding unless the shifted key has
+	// its own binding. Preserve it as a distinct key in live view and retain
+	// its conventional clipboard behavior while a copy-mode selection exists.
+	await execFileAsync(
+		"tmux",
+		[
+			"-L",
+			server,
+			"bind-key",
+			"-T",
+			"root",
+			"C-S-c",
+			"send-keys",
+			"-l",
+			CTRL_SHIFT_C_SEQUENCE,
+		],
+		{ env: environment },
+	);
+	for (const table of ["copy-mode", "copy-mode-vi"]) {
+		await execFileAsync(
+			"tmux",
+			[
+				"-L",
+				server,
+				"bind-key",
+				"-T",
+				table,
+				"C-S-c",
+				"send-keys",
+				"-X",
+				"copy-pipe-no-clear",
+			],
+			{ env: environment },
+		);
+	}
+}
+
 async function matchTerminalSize(
 	server: string,
 	session: string,
@@ -269,7 +333,7 @@ export async function attachAgentTerminal(
 	tui: TUI,
 	client: SupervisorClient,
 	jobId: string,
-): Promise<void> {
+): Promise<TerminalAttachmentResult> {
 	const job = await client.prepareAttach(jobId);
 	if (!job.terminalServer || !job.terminalSession) {
 		throw new Error("Agent terminal is unavailable");
@@ -313,6 +377,7 @@ export async function attachAgentTerminal(
 	);
 	await configureClipboard(terminalServer, environment);
 	await configureCopyMode(terminalServer, environment);
+	await configureSinglePressExit(terminalServer, environment);
 	await matchTerminalSize(
 		terminalServer,
 		terminalSession,
@@ -323,8 +388,9 @@ export async function attachAgentTerminal(
 	await tui.terminal.drainInput(100);
 	tui.stop();
 	tui.terminal.clearScreen();
+	let result: TerminalAttachmentResult | undefined;
 	try {
-		await new Promise<void>((resolve, reject) => {
+		const exitCode = await new Promise<number | null>((resolve, reject) => {
 			const child = spawn(
 				"tmux",
 				["-L", terminalServer, "attach-session", "-t", terminalSession],
@@ -334,13 +400,15 @@ export async function attachAgentTerminal(
 				},
 			);
 			child.once("error", reject);
-			// Detaching and exiting the managed Pi process can produce different
-			// tmux status codes; both normally mean control should return to Pi.
-			child.once("close", () => resolve());
+			child.once("close", (code) => resolve(code));
 		});
+		result = exitCode === ATTACHED_EXIT_CODE ? "exit" : "detached";
+		return result;
 	} finally {
 		tui.terminal.clearScreen();
-		tui.start();
-		tui.requestRender(true);
+		if (result !== "exit") {
+			tui.start();
+			tui.requestRender(true);
+		}
 	}
 }

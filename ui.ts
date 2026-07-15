@@ -17,12 +17,14 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { SupervisorClient } from "./client.ts";
+import { isPlainCtrlC } from "./exit.ts";
 import {
 	AGENT_COLORS,
 	type AgentColor,
 	type AgentRecord,
 	type AgentStatus,
 	type SupervisorEvent,
+	type TerminalAttachmentResult,
 } from "./types.ts";
 
 const STATUS_ORDER: AgentStatus[] = ["needs_input", "working", "complete"];
@@ -75,7 +77,8 @@ export interface AgentViewOptions {
 	getThinkingLevel: () => string;
 	cycleThinkingLevel: () => string;
 	projectTrusted: boolean;
-	attach: (tui: TUI, jobId: string) => Promise<void>;
+	exit: () => void;
+	attach: (tui: TUI, jobId: string) => Promise<TerminalAttachmentResult>;
 }
 
 export interface AgentViewOutcome {
@@ -141,7 +144,6 @@ class AgentViewComponent implements Component, Focusable {
 	private busy = false;
 	private error?: string;
 	private deleteArmed?: { id: string; at: number };
-	private lastCtrlC = 0;
 	private _focused = false;
 	private disposed = false;
 
@@ -279,7 +281,11 @@ class AgentViewComponent implements Component, Focusable {
 
 	private attach(job: AgentRecord | undefined): void {
 		if (!job || this.busy) return;
-		this.runAction(() => this.options.attach(this.tui, job.id));
+		this.runAction(async () => {
+			if ((await this.options.attach(this.tui, job.id)) === "exit") {
+				this.options.exit();
+			}
+		});
 	}
 
 	private attachSelected(): void {
@@ -373,6 +379,10 @@ class AgentViewComponent implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
+		if (isPlainCtrlC(data, matchesKey)) {
+			this.options.exit();
+			return;
+		}
 		if (this.mode === "help") {
 			if (
 				this.keybindings.matches(data, "tui.select.cancel") ||
@@ -452,15 +462,6 @@ class AgentViewComponent implements Component, Focusable {
 		} else if (this.keybindings.matches(data, "app.interrupt")) {
 			if (!inputEmpty) this.promptEditor.setText("");
 			else this.done({ type: "close" });
-		} else if (this.keybindings.matches(data, "app.clear")) {
-			if (!inputEmpty) {
-				this.promptEditor.setText("");
-				this.lastCtrlC = 0;
-			} else if (Date.now() - this.lastCtrlC < 500) {
-				this.done({ type: "close" });
-			} else {
-				this.lastCtrlC = Date.now();
-			}
 		} else {
 			for (let index = 1; index <= 9; index++) {
 				if (!matchesKey(data, `alt+${index}` as KeyId)) continue;
@@ -657,6 +658,8 @@ class AgentViewComponent implements Component, Focusable {
 			" Ctrl+X            Stop; press again to delete",
 			" Shift+Tab         Cycle dispatch thinking level",
 			" /                 Return to native slash commands",
+			" Ctrl+C            Exit Pi (agents keep running)",
+			" Ctrl+Shift+C      Terminal copy (does not exit)",
 			" Esc               Clear input or close Agents",
 			"",
 			this.theme.fg(

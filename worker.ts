@@ -6,9 +6,10 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
+import { Container, matchesKey, Text } from "@earendil-works/pi-tui";
 import { SupervisorClient } from "./client.ts";
 import { installAgentsNavigationEditor } from "./editor.ts";
+import { installSinglePressExit } from "./exit.ts";
 import type { AgentRecord, SupervisorEvent } from "./types.ts";
 
 const JOB_ID = process.env.PI_AGENT_JOB_ID;
@@ -110,6 +111,7 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 	let client: SupervisorClient | undefined;
 	let context: ExtensionContext | undefined;
 	let unsubscribe: (() => void) | undefined;
+	let unsubscribeExit: (() => void) | undefined;
 	let reconnectTimer: ReturnType<typeof setInterval> | undefined;
 	let applyingName = false;
 
@@ -189,6 +191,8 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		context = ctx;
+		unsubscribeExit?.();
+		unsubscribeExit = installSinglePressExit(ctx, matchesKey);
 		installAgentsNavigationEditor(
 			ctx,
 			(tui, theme, keybindings) => new CustomEditor(tui, theme, keybindings),
@@ -272,6 +276,8 @@ export function registerWorkerIntegration(pi: ExtensionAPI): void {
 			await sendEvent("session_shutdown", { reason: event.reason });
 		unsubscribe?.();
 		unsubscribe = undefined;
+		unsubscribeExit?.();
+		unsubscribeExit = undefined;
 		if (reconnectTimer) clearInterval(reconnectTimer);
 		reconnectTimer = undefined;
 		client?.close();

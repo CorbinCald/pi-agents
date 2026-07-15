@@ -17,6 +17,7 @@ A native Agents workspace for [Pi Coding Agent](https://github.com/earendil-work
 - Persistent color labels, pinning, renaming, reordering, stopping, and deletion
 - Mouse/trackpad scrollback with a 100,000-line history and automatic clipboard copy on text selection
 - `Alt+C` copies the latest agent message while attached
+- One **Ctrl+C** exits the host Pi from any Agents screen while persistent agents keep running; **Ctrl+Shift+C** remains available for terminal copy
 - Source directory and isolated worktree shown inside each native Pi session
 - Empty-prompt **Left Arrow** or `/agents` to open the workspace and detach back to it
 
@@ -67,6 +68,7 @@ pi remove git:github.com/CorbinCald/pi-agents
 - Use the **mouse wheel or trackpad** to scroll through an attached conversation.
 - Drag to select conversation text; releasing the mouse automatically copies it while preserving the highlight and scrollback position. A plain click or printable key clears the selection and returns to live input; the typed key is preserved. Press **Escape** to return without typing.
 - Press **Alt+C** while attached to copy the latest agent message.
+- Press **Ctrl+C** once anywhere—including the workspace, an attached session, or scrollback—to exit the host Pi. Persistent agents continue running in the background. **Ctrl+Shift+C** does not exit Pi and remains available for the terminal's copy shortcut.
 
 Each agent is one persistent interactive Pi process, not a transcript emulation or parallel session UI. On attach, the host UI stops and the terminal is handed directly to that Pi process. Native slash commands, `/new`, `/resume`, model controls, bash mode, external editor support, custom extensions, configured keybindings, and normal Pi shortcuts remain available; Agents only claims Left Arrow when the editor is empty.
 
@@ -88,6 +90,8 @@ Press `?` in the workspace to show the current controls.
 | `Shift+Tab` | Cycle dispatch reasoning effort |
 | `Ctrl+X` | Stop; press again within two seconds to delete |
 | `/` | Return to native Pi slash commands |
+| `Ctrl+C` | Exit the host Pi; persistent agents keep running |
+| `Ctrl+Shift+C` | Terminal copy; does not exit Pi |
 | `Escape` | Clear the task editor or close the workspace |
 
 ## Session states
@@ -136,7 +140,7 @@ npm test
 npm run lint
 ```
 
-The integration suite uses fake native Pi processes and temporary Git repositories. It covers concurrent worktree isolation, state classification, recaps, direct terminal follow-ups, client disconnection, persistent native tmux sessions, attach preparation, scrollback configuration, and cleanup.
+The integration suite uses fake native Pi processes and temporary Git repositories. It covers concurrent worktree isolation, state classification, recaps, direct terminal follow-ups, client disconnection, persistent native tmux sessions, single-press exit behavior, attach preparation, scrollback configuration, and cleanup.
 
 To try a checkout without installing it permanently:
 

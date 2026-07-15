@@ -21,6 +21,7 @@ test("attach configures clipboard copy and settles a resized hidden worker", asy
 printf '%s\\n' "$*" >> "$TMUX_TEST_LOG"
 case "$*" in
   *display-message*) printf '120 40\\n' ;;
+  *attach-session*) exit "\${TMUX_TEST_ATTACH_EXIT:-0}" ;;
   *capture-pane*)
     i=0
     while [ "$i" -lt 46 ]; do printf '\\n'; i=$((i + 1)); done
@@ -36,6 +37,7 @@ esac
 	const environmentKeys = [
 		"PATH",
 		"TMUX_TEST_LOG",
+		"TMUX_TEST_ATTACH_EXIT",
 		"DISPLAY",
 		"WAYLAND_DISPLAY",
 		"SSH_CONNECTION",
@@ -50,7 +52,9 @@ esac
 	process.env.PATH = `${directory}:${process.env.PATH || ""}`;
 	process.env.TMUX_TEST_LOG = logPath;
 	process.env.DISPLAY = ":99";
-	for (const key of environmentKeys.slice(3)) delete process.env[key];
+	for (const key of environmentKeys.slice(1)) {
+		if (key !== "TMUX_TEST_LOG" && key !== "DISPLAY") delete process.env[key];
+	}
 
 	const events = [];
 	const tui = {
@@ -73,7 +77,8 @@ esac
 
 	try {
 		const startedAt = Date.now();
-		await attachAgentTerminal(tui, client, "test-job");
+		const result = await attachAgentTerminal(tui, client, "test-job");
+		assert.equal(result, "detached");
 		assert.ok(Date.now() - startedAt >= 15);
 
 		const commands = (await readFile(logPath, "utf8")).trim().split("\n");
@@ -87,7 +92,10 @@ esac
 		);
 		const retainedMouseBindings = commands
 			.map((command, index) => ({ command, index }))
-			.filter(({ command }) => command.includes("copy-pipe-no-clear"));
+			.filter(
+				({ command }) =>
+					!command.includes("C-S-c") && command.includes("copy-pipe-no-clear"),
+			);
 		const mouseCancelBindings = commands.filter((command) =>
 			command.includes("MouseUp1Pane send-keys -X cancel"),
 		);
@@ -97,6 +105,14 @@ esac
 				command.includes("q send-keys -X cancel \\; send-keys") &&
 				command.includes("Any send-keys -X cancel \\; send-keys"),
 		);
+		const exitBindings = commands
+			.map((command, index) => ({ command, index }))
+			.filter(({ command }) =>
+				command.includes("C-c detach-client -E exit 79"),
+			);
+		const shiftedControlCBindings = commands
+			.map((command, index) => ({ command, index }))
+			.filter(({ command }) => command.includes("C-S-c"));
 		const resizeIndex = commands.indexOf(
 			"-L test-server resize-window -t test-session -x 160 -y 50",
 		);
@@ -114,6 +130,27 @@ esac
 		assert.equal(retainedMouseBindings.length, 8);
 		assert.equal(mouseCancelBindings.length, 2);
 		assert.equal(typingBindings.length, 2);
+		assert.equal(exitBindings.length, 3);
+		assert.deepEqual(
+			exitBindings.map(({ command }) => command.split(" ")[4]),
+			["root", "copy-mode", "copy-mode-vi"],
+		);
+		assert.equal(shiftedControlCBindings.length, 3);
+		assert.ok(
+			shiftedControlCBindings.some(({ command }) =>
+				command.includes("root C-S-c send-keys -l \u001b[99;6u"),
+			),
+		);
+		assert.equal(
+			shiftedControlCBindings.filter(({ command }) =>
+				command.includes("C-S-c send-keys -X copy-pipe-no-clear"),
+			).length,
+			2,
+		);
+		assert.ok(exitBindings.every(({ index }) => index < resizeIndex));
+		assert.ok(
+			shiftedControlCBindings.every(({ index }) => index < resizeIndex),
+		);
 		assert.ok(
 			retainedMouseBindings.every(
 				({ index }) => index > copyCommandIndex && index < resizeIndex,
@@ -131,6 +168,11 @@ esac
 			"start",
 			"render:true",
 		]);
+
+		events.length = 0;
+		process.env.TMUX_TEST_ATTACH_EXIT = "79";
+		assert.equal(await attachAgentTerminal(tui, client, "test-job"), "exit");
+		assert.deepEqual(events, ["drain:100", "stop", "clear", "clear"]);
 	} finally {
 		for (const [key, value] of originalEnvironment) {
 			if (value === undefined) delete process.env[key];
@@ -365,6 +407,182 @@ test("selection copies in place, then clicking or typing returns to input", {
 				});
 			} catch {
 				// A server may exit when its final attached command exits.
+			}
+		}
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("only plain Ctrl+C requests host exit from live view or copy mode", {
+	timeout: 5_000,
+}, async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-agents-ctrl-c-"));
+	const suffix = `${process.pid}-${Date.now()}`;
+	const privateServer = `pi-agents-exit-private-${suffix}`;
+	const outerServer = `pi-agents-exit-outer-${suffix}`;
+
+	try {
+		execFileSync("tmux", [
+			"-L",
+			privateServer,
+			"-f",
+			"/dev/null",
+			"new-session",
+			"-d",
+			"-s",
+			"worker",
+			"-x",
+			"40",
+			"-y",
+			"10",
+			"exec sleep 30",
+		]);
+		for (const table of ["root", "copy-mode", "copy-mode-vi"]) {
+			execFileSync("tmux", [
+				"-L",
+				privateServer,
+				"bind-key",
+				"-T",
+				table,
+				"C-c",
+				"detach-client",
+				"-E",
+				"exit 79",
+			]);
+		}
+		execFileSync("tmux", [
+			"-L",
+			privateServer,
+			"bind-key",
+			"-T",
+			"root",
+			"C-S-c",
+			"send-keys",
+			"-l",
+			"\u001b[99;6u",
+		]);
+		for (const table of ["copy-mode", "copy-mode-vi"]) {
+			execFileSync("tmux", [
+				"-L",
+				privateServer,
+				"bind-key",
+				"-T",
+				table,
+				"C-S-c",
+				"send-keys",
+				"-X",
+				"copy-pipe-no-clear",
+			]);
+		}
+
+		const attachHost = async (markerPath) => {
+			execFileSync("tmux", [
+				"-L",
+				outerServer,
+				"-f",
+				"/dev/null",
+				"new-session",
+				"-d",
+				"-s",
+				"host",
+				"-x",
+				"40",
+				"-y",
+				"10",
+				`env -u TMUX -u TMUX_PANE TERM=xterm-256color tmux -L ${privateServer} attach-session -t worker; printf '%s' "$?" > "${markerPath}"; exec sleep 5`,
+			]);
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const clients = execFileSync(
+					"tmux",
+					["-L", privateServer, "list-clients", "-F", "#{client_name}"],
+					{ encoding: "utf8" },
+				).trim();
+				if (clients) return;
+				await sleep(20);
+			}
+			assert.fail("private tmux client did not attach");
+		};
+
+		for (const mode of ["live", "copy-mode"]) {
+			const markerPath = join(directory, mode);
+			await attachHost(markerPath);
+			if (mode === "copy-mode") {
+				execFileSync("tmux", [
+					"-L",
+					privateServer,
+					"copy-mode",
+					"-t",
+					"worker",
+				]);
+			}
+
+			// CSI-u preserves Shift, so Ctrl+Shift+C must not match the C-c exit
+			// binding in either the root or copy-mode table.
+			execFileSync("tmux", [
+				"-L",
+				outerServer,
+				"send-keys",
+				"-t",
+				"host",
+				"-l",
+				"\u001b[99;6u",
+			]);
+			await sleep(50);
+			await assert.rejects(readFile(markerPath, "utf8"), { code: "ENOENT" });
+			assert.notEqual(
+				execFileSync(
+					"tmux",
+					["-L", privateServer, "list-clients", "-F", "#{client_name}"],
+					{ encoding: "utf8" },
+				).trim(),
+				"",
+			);
+
+			execFileSync("tmux", [
+				"-L",
+				outerServer,
+				"send-keys",
+				"-t",
+				"host",
+				"C-c",
+			]);
+			let marker = "";
+			for (let attempt = 0; attempt < 50; attempt++) {
+				try {
+					marker = await readFile(markerPath, "utf8");
+				} catch {
+					// The attached tmux client has not returned its exit request yet.
+				}
+				if (marker === "79") break;
+				await sleep(20);
+			}
+
+			assert.equal(marker, "79");
+			assert.equal(
+				execFileSync(
+					"tmux",
+					["-L", privateServer, "list-clients", "-F", "#{client_name}"],
+					{ encoding: "utf8" },
+				).trim(),
+				"",
+			);
+			execFileSync("tmux", [
+				"-L",
+				privateServer,
+				"has-session",
+				"-t",
+				"worker",
+			]);
+			execFileSync("tmux", ["-L", outerServer, "kill-server"]);
+		}
+	} finally {
+		for (const server of [outerServer, privateServer]) {
+			try {
+				execFileSync("tmux", ["-L", server, "kill-server"], {
+					stdio: "ignore",
+				});
+			} catch {
+				// The server may already be gone.
 			}
 		}
 		await rm(directory, { recursive: true, force: true });

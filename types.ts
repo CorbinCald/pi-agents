@@ -1,4 +1,5 @@
 export type AgentStatus = "needs_input" | "working" | "complete";
+export type TerminalAttachmentResult = "detached" | "exit";
 
 export const AGENT_COLORS = [
 	"red",
