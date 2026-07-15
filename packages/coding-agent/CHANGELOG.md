@@ -17,6 +17,7 @@
 - Added file-backed dynamic catalogs in `models-store.json`, per-provider pi.dev catalog overlays, and Radius gateway support including offline migration from legacy credential-cached catalogs.
 - Added extension provider `refreshModels(context)` support for dynamic model discovery with optional provider-controlled persistence.
 - Added a built-in Agents workspace for persistent native Pi sessions, including packaged supervisor scripts, canonical transcript discovery, and isolated Git worktrees.
+- Added built-in context compaction with `openai/gpt-5.6-luna` at high reasoning effort and a persistent completion entry, restoring the policy lost during the monorepo migration.
 - Added bare-startup workspace events and fullscreen extension components.
 - Added a local-build provenance marker that disables registry version checks and blocks self-update while preserving extension-only updates.
 

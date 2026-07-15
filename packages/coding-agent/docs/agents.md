@@ -8,7 +8,7 @@ Agents is Pi's built-in workspace for running multiple persistent interactive se
 - tmux 3.5 or newer
 - Git for worktree isolation
 - Linux, macOS, or WSL; native Windows is not currently supported
-- Access to `openai/gpt-5.6-luna` for automatic completion recaps
+- Access to `openai/gpt-5.6-luna` for context compaction and automatic completion recaps
 
 Agents is included in `@earendil-works/pi-coding-agent`; it does not require a separate extension install.
 
@@ -46,6 +46,8 @@ All application actions can be remapped in `~/.pi/agent/keybindings.json`; see [
 | `?` | Show workspace help |
 
 Direct OpenAI GPT-5.6 Responses models add **Max Pro** after `max`. It combines `reasoning.effort: "max"` with `reasoning.mode: "pro"` and is not shown for unsupported models.
+
+Context compaction uses `openai/gpt-5.6-luna` at high reasoning effort regardless of the active session model or reasoning level. This policy is built into Pi Agents and does not require a global compaction extension. After a successful compaction, a persistent transcript entry identifies the model and reasoning effort used.
 
 ## Session States
 

@@ -4,6 +4,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
+import { lunaCompactionExtension } from "./extensions/luna-compaction.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import {
 	DefaultResourceLoader,
@@ -143,11 +144,16 @@ export async function createAgentSessionServices(
 			modelsPath: join(agentDir, "models.json"),
 		}));
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
+	const resourceLoaderOptions = options.resourceLoaderOptions ?? {};
 	const resourceLoader = new DefaultResourceLoader({
-		...(options.resourceLoaderOptions ?? {}),
+		...resourceLoaderOptions,
 		cwd,
 		agentDir,
 		settingsManager,
+		extensionFactories: [
+			{ name: "luna-compaction", factory: lunaCompactionExtension },
+			...(resourceLoaderOptions.extensionFactories ?? []),
+		],
 	});
 	await resourceLoader.reload(options.resourceLoaderReloadOptions);
 
