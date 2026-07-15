@@ -28,8 +28,15 @@ A native Agents workspace for [Pi Coding Agent](https://github.com/earendil-work
 - Git for worktree isolation
 - Linux, macOS, or WSL; native Windows is not currently supported
 - Access to `openai/gpt-5.6-luna` for completion recaps
+- A user-writable Pi installation so Agents can maintain its Pi 0.80.6 compatibility patch
 
 The worker session uses whichever model is selected in the host Pi session. Classification and recap generation use `openai/gpt-5.6-luna` at medium reasoning effort and therefore incur normal provider usage.
+
+### Maintained Pi compatibility
+
+Pi Agents owns a targeted compatibility patch for Pi 0.80.6 that prevents one completed compaction from rendering twice. The extension verifies and applies the patch when it loads, and the supervisor verifies it again before launching a managed worker. Applying it repeatedly is safe.
+
+The patch refuses to modify unsupported Pi versions or unrecognized source layouts. If it is newly applied, restart the current host Pi process to update its already-loaded core; workers launched afterward use the patched installation immediately.
 
 ## Install
 

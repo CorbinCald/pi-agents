@@ -20,6 +20,7 @@ import { mkdir, rm } from "node:fs/promises";
 import net from "node:net";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { ensurePiCompactionUiPatch } from "./pi-compat.js";
 
 const ROOT =
 	process.env.PI_AGENTS_ROOT ||
@@ -93,6 +94,19 @@ function log(message, error) {
 	}
 }
 
+function ensureManagedPiCompatibility() {
+	try {
+		const result = ensurePiCompactionUiPatch(piInvocation);
+		if (result.status === "patched") {
+			log(`Patched duplicate Pi compaction rendering in ${result.targetPath}`);
+		}
+		return result;
+	} catch (error) {
+		log("Could not apply the required Pi compatibility patch", error);
+		throw error;
+	}
+}
+
 function acquireLock() {
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
@@ -120,6 +134,7 @@ function acquireLock() {
 }
 
 acquireLock();
+ensureManagedPiCompatibility();
 
 const jobs = new Map();
 const terminalRunning = new Set();
@@ -416,6 +431,7 @@ function terminalLaunchCommand(job, initialPrompt) {
 }
 
 async function ensureTerminal(job, initialPrompt) {
+	ensureManagedPiCompatibility();
 	job.backend = "terminal";
 	job.terminalServer = TMUX_SERVER;
 	job.terminalSession ||= `pi-agent-${job.id}`;

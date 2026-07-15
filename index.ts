@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { SupervisorClient } from "./client.ts";
 import { installAgentsNavigationEditor } from "./editor.ts";
+import { ensureCurrentPiCompactionUiPatch } from "./pi-compat.js";
 import { attachAgentTerminal } from "./terminal.ts";
 import type { AgentRecord, SupervisorEvent } from "./types.ts";
 import { showAgentView } from "./ui.ts";
@@ -22,9 +23,18 @@ const THINKING_LEVELS = [
 
 export default function agentsExtension(pi: ExtensionAPI): void {
 	if (process.env.PI_AGENTS_RECAP === "1") return;
+	const piCompatibility = ensureCurrentPiCompactionUiPatch();
 	if (process.env.PI_AGENTS_WORKER === "1") {
 		registerWorkerIntegration(pi);
 		return;
+	}
+	if (piCompatibility.status === "patched") {
+		pi.on("session_start", (_event, ctx) => {
+			ctx.ui.notify(
+				"Pi Agents patched duplicate compaction rendering; restart this Pi process to apply it here",
+				"info",
+			);
+		});
 	}
 
 	let client: SupervisorClient | undefined;
