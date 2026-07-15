@@ -321,7 +321,7 @@ function writeTmuxConfig() {
 		'bind-key -T root WheelUpPane if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -e ; send-keys -X -N 5 scroll-up }',
 		"set -g focus-events on",
 		"set -g extended-keys always",
-		"set -g extended-keys-format csi-u",
+		"if-shell 'tmux show-options -g extended-keys-format >/dev/null 2>&1' 'set -g extended-keys-format csi-u'",
 		"set -s escape-time 0",
 		"set -g remain-on-exit off",
 		"set -g detach-on-destroy on",
