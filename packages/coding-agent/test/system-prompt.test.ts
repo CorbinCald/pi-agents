@@ -46,15 +46,21 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("- write:");
 		});
 
-		test("instructs models to resolve pi docs and examples under absolute base paths", () => {
+		test("identifies Pi Agents and directs distribution questions to canonical documentation", () => {
 			const prompt = buildSystemPrompt({
 				contextFiles: [],
 				skills: [],
 				cwd: process.cwd(),
 			});
 
+			expect(prompt).toContain("operating inside Pi Agents, an independent coding-agent distribution");
+			expect(prompt).toContain("- Canonical source: https://github.com/CorbinCald/pi-agents");
+			expect(prompt).toContain("bundled documentation below as the sole source of truth for Pi Agents");
+			expect(prompt).toContain("earendil-works/pi repository and pi.dev document upstream lineage");
+			expect(prompt).toContain("@earendil-works/* package names are retained only as compatibility identifiers");
+			expect(prompt).toContain("Agents workspace (docs/agents.md)");
 			expect(prompt).toContain(
-				"- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory",
+				"- When reading Pi Agents docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory",
 			);
 		});
 	});

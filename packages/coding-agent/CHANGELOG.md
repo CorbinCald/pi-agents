@@ -26,6 +26,7 @@
 - Changed `ModelRuntime` to compose built-in providers, immutable `models.json` configuration, and extension overlays through ad-hoc pi-ai provider methods.
 - Changed `ModelRuntime` to own final request assembly: `getAuth(model)` includes configured model headers, stream methods resolve auth once, and `before_provider_headers` runs as the Models-only header transform before provider dispatch.
 - Changed `/model` to render the current model snapshot immediately, refresh configured providers in the background, and update the open selector with partial results or timeout errors.
+- Changed the default system prompt to identify Pi Agents, establish `CorbinCald/pi-agents` and its bundled docs as authoritative, distinguish upstream lineage and compatibility package names, and route Agents workspace questions to `docs/agents.md`.
 
 ### Fixed
 
