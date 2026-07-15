@@ -45,11 +45,12 @@
 	"scripts": {
 		"test": "node --test ./tests/*.test.mjs",
 		"lint": "biome check .",
-		"check:syntax": "node --check ./pi-compat.js && node --check ./supervisor.mjs && node --check ./tests/exit.test.mjs && node --check ./tests/fake-pi.mjs && node --check ./tests/pi-compat.test.mjs && node --check ./tests/reasoning.test.mjs && node --check ./tests/terminal.test.mjs",
+		"check:syntax": "node --check ./pi-compat.js && node --check ./supervisor.mjs && node --check ./tests/compaction.test.mjs && node --check ./tests/exit.test.mjs && node --check ./tests/fake-pi.mjs && node --check ./tests/pi-compat.test.mjs && node --check ./tests/reasoning.test.mjs && node --check ./tests/terminal.test.mjs",
 		"check": "npm run check:syntax && npm run lint && npm test"
 	},
 	"pi": {
 		"extensions": [
+			"./compaction.ts",
 			"./index.ts"
 		]
 	}

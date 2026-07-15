@@ -28,10 +28,10 @@ A native Agents workspace for [Pi Coding Agent](https://github.com/earendil-work
 - tmux `3.5` or newer
 - Git for worktree isolation
 - Linux, macOS, or WSL; native Windows is not currently supported
-- Access to `openai/gpt-5.6-luna` for completion recaps
+- Access to `openai/gpt-5.6-luna` for context compaction and completion recaps
 - A user-writable Pi installation so Agents can maintain its Pi 0.80.6 compatibility patch
 
-The worker session uses whichever model is selected in the host Pi session. Classification and recap generation use `openai/gpt-5.6-luna` at medium reasoning effort and therefore incur normal provider usage.
+The worker session uses whichever model is selected in the host Pi session. Context compaction uses `openai/gpt-5.6-luna` at high reasoning effort. Classification and recap generation use the same model at medium reasoning effort. Both incur normal provider usage.
 
 ### Maintained Pi compatibility
 
