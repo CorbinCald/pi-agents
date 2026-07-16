@@ -25,7 +25,9 @@ case "$*" in
   *capture-pane*)
     i=0
     while [ "$i" -lt 46 ]; do printf '\\n'; i=$((i + 1)); done
-    printf '%160s\\n' '' | tr ' ' '-'
+    if [ "\${TMUX_TEST_NO_BORDER:-}" != "1" ]; then
+      printf '%160s\\n' '' | tr ' ' '-'
+    fi
     printf '\\n\\n'
     ;;
 esac
@@ -38,6 +40,7 @@ esac
 		"PATH",
 		"TMUX_TEST_LOG",
 		"TMUX_TEST_ATTACH_EXIT",
+		"TMUX_TEST_NO_BORDER",
 		"DISPLAY",
 		"WAYLAND_DISPLAY",
 		"SSH_CONNECTION",
@@ -168,6 +171,13 @@ esac
 			"start",
 			"render:true",
 		]);
+
+		await writeFile(logPath, "");
+		events.length = 0;
+		process.env.TMUX_TEST_NO_BORDER = "1";
+		assert.equal(await attachAgentTerminal(tui, client, "test-job"), "detached");
+		const noBorderCommands = (await readFile(logPath, "utf8")).trim().split("\n");
+		assert.equal(noBorderCommands.filter((command) => command.includes("capture-pane")).length, 1);
 
 		events.length = 0;
 		process.env.TMUX_TEST_ATTACH_EXIT = "79";

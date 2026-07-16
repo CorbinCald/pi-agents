@@ -40,8 +40,9 @@ const SESSION_ROOT =
 const WORKTREES_DIR = join(ROOT, "worktrees");
 const RECAP_MODEL = "openai/gpt-5.6-luna";
 const RECAP_THINKING = "medium";
-const PROTOCOL_VERSION = 5;
+const PROTOCOL_VERSION = 6;
 const MAX_RECAP_INPUT_CHARS = 48_000;
+const MAX_VISIBLE_COMPLETE_SESSIONS = 10;
 const MAX_EVENT_TEXT_CHARS = 24_000;
 const RECAP_TIMEOUT_MS = 180_000;
 const IDLE_WORKER_TTL_MS = durationFromEnvironment(
@@ -156,6 +157,7 @@ const terminalWorkerPids = new Map();
 const terminalAttachReservations = new Map();
 const clients = new Set();
 const generations = new Map();
+const nativeSessionCache = new Map();
 let gitQueue = Promise.resolve();
 let shuttingDown = false;
 
@@ -1093,6 +1095,33 @@ function discoveredJobId(sessionPath) {
 	return `native-${createHash("sha1").update(resolve(sessionPath)).digest("hex").slice(0, 12)}`;
 }
 
+function recentNativeSessionFiles() {
+	const files = [];
+	for (const path of listNativeSessionFiles(SESSION_ROOT)) {
+		try {
+			const stats = statSync(path);
+			files.push({ path: resolve(path), modifiedAt: stats.mtimeMs, size: stats.size });
+		} catch {
+			// A session removed during discovery is harmless.
+		}
+	}
+	return files.sort((a, b) => b.modifiedAt - a.modifiedAt || a.path.localeCompare(b.path));
+}
+
+function readCachedNativeSession(file) {
+	const cached = nativeSessionCache.get(file.path);
+	if (cached?.modifiedAt === file.modifiedAt && cached.size === file.size) {
+		return cached.session;
+	}
+	const session = readNativeSession(file.path);
+	nativeSessionCache.set(file.path, {
+		modifiedAt: file.modifiedAt,
+		size: file.size,
+		session,
+	});
+	return session;
+}
+
 function syncDiscoveredSessions() {
 	const byPath = new Map();
 	const bySessionId = new Map();
@@ -1102,10 +1131,17 @@ function syncDiscoveredSessions() {
 		if (typeof job.sessionId === "string") bySessionId.set(job.sessionId, job);
 	}
 
-	for (const sessionFile of listNativeSessionFiles(SESSION_ROOT)) {
-		const session = readNativeSession(sessionFile);
+	const recentDiscoveredIds = new Set();
+	for (const sessionFile of recentNativeSessionFiles()) {
+		if (recentDiscoveredIds.size >= MAX_VISIBLE_COMPLETE_SESSIONS) break;
+		if (hiddenSessionFiles.has(sessionFile.path)) continue;
+
+		const pathJob = byPath.get(sessionFile.path);
+		if (pathJob && (!pathJob.discovered || terminalRunning.has(pathJob.id))) continue;
+
+		const session = readCachedNativeSession(sessionFile);
 		if (!session) continue;
-		let job = byPath.get(session.path) || bySessionId.get(session.id);
+		let job = pathJob || bySessionId.get(session.id);
 		if (job) {
 			if (
 				job.sessionFile !== session.path &&
@@ -1124,14 +1160,11 @@ function syncDiscoveredSessions() {
 				job.updatedAt = session.updatedAt;
 				job.completedAt = session.updatedAt;
 				if (!job.userRenamed) job.name = session.name;
+				if (job.status === "complete") recentDiscoveredIds.add(job.id);
 			}
 			continue;
 		}
-		if (
-			hiddenSessionFiles.has(session.path) ||
-			hiddenSessionIds.has(session.id)
-		)
-			continue;
+		if (hiddenSessionIds.has(session.id)) continue;
 
 		let id = discoveredJobId(session.path);
 		let suffix = 2;
@@ -1169,6 +1202,7 @@ function syncDiscoveredSessions() {
 		generations.set(id, 0);
 		byPath.set(session.path, job);
 		bySessionId.set(session.id, job);
+		recentDiscoveredIds.add(id);
 	}
 }
 
@@ -1181,6 +1215,19 @@ function sortedJobs() {
 		if (a.order !== b.order) return a.order - b.order;
 		return b.updatedAt - a.updatedAt;
 	});
+}
+
+function listedJobs() {
+	const recentCompleteIds = new Set(
+		[...jobs.values()]
+			.filter((job) => job.status === "complete")
+			.sort((a, b) => b.updatedAt - a.updatedAt)
+			.slice(0, MAX_VISIBLE_COMPLETE_SESSIONS)
+			.map((job) => job.id),
+	);
+	return sortedJobs().filter(
+		(job) => job.status !== "complete" || recentCompleteIds.has(job.id),
+	);
 }
 
 async function dispatchJob(request) {
@@ -1299,7 +1346,7 @@ async function handleRequest(message) {
 	switch (message.type) {
 		case "list":
 			syncDiscoveredSessions();
-			return sortedJobs().map(publicJob);
+			return listedJobs().map(publicJob);
 		case "dispatch":
 			return dispatchJob(message);
 		case "prepare_attach": {
@@ -1446,7 +1493,6 @@ function attachClient(socket) {
 }
 
 await migrateLegacySessions();
-syncDiscoveredSessions();
 
 if (existsSync(SOCKET_PATH)) {
 	try {

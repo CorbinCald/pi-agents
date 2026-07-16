@@ -38,6 +38,7 @@
 - Fixed completed compaction summaries rendering twice in interactive mode.
 - Fixed Agents supervisor startup on tmux versions that do not support `extended-keys-format`.
 - Fixed the central Agents workspace to hand `/` back to Pi's native command editor instead of rejecting slash commands.
+- Fixed multi-second Agents startup and native-session attach delays by bounding and caching canonical transcript discovery and skipping resize waits before a new worker has rendered its editor.
 
 ## [0.80.7] - 2026-07-14
 

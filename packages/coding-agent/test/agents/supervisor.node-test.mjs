@@ -6,6 +6,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import net from "node:net";
@@ -304,7 +305,7 @@ test("supervisor discovers, resumes, and retains canonical Pi sessions", {
 	try {
 		await waitFor(() => existsSync(join(agentsRoot, "supervisor.sock")));
 		client = await connect(join(agentsRoot, "supervisor.sock"));
-		assert.equal((await client.request("ping")).protocolVersion, 5);
+		assert.equal((await client.request("ping")).protocolVersion, 6);
 		const listed = await client.request("list");
 		assert.equal(listed.length, 1);
 		assert.equal(listed[0].sessionFile, sessionFile);
@@ -334,6 +335,81 @@ test("supervisor discovers, resumes, and retains canonical Pi sessions", {
 				// Removing the final session normally stops the private server.
 			}
 		}
+		await stopProcess(supervisor);
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("supervisor discovers only the ten newest canonical Complete sessions", {
+	timeout: 10_000,
+}, async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-agents-recent-sessions-test-"));
+	const workspace = join(root, "workspace");
+	const agentsRoot = join(root, "agents");
+	const sessionRoot = join(root, "sessions");
+	const sessionDirectory = canonicalSessionDirectory(sessionRoot, workspace);
+	mkdirSync(workspace, { recursive: true });
+	mkdirSync(sessionDirectory, { recursive: true });
+
+	const baseTime = new Date("2026-07-01T00:00:00.000Z").getTime();
+	const writeSession = (index) => {
+		const sessionFile = join(sessionDirectory, `native-${index}.jsonl`);
+		writeFileSync(
+			sessionFile,
+			`${[
+				{
+					type: "session",
+					version: 3,
+					id: `canonical-${index}`,
+					timestamp: new Date(baseTime + index * 1_000).toISOString(),
+					cwd: workspace,
+				},
+				{
+					type: "message",
+					id: `message-${index}`,
+					parentId: null,
+					timestamp: new Date(baseTime + index * 1_000).toISOString(),
+					message: {
+						role: "user",
+						content: [{ type: "text", text: `Canonical session ${index}` }],
+					},
+				},
+			]
+				.map((entry) => JSON.stringify(entry))
+				.join("\n")}\n`,
+		);
+		const modified = new Date(baseTime + index * 1_000);
+		utimesSync(sessionFile, modified, modified);
+	};
+	for (let index = 0; index < 12; index++) writeSession(index);
+
+	const supervisor = spawn(process.execPath, [supervisorPath], {
+		env: {
+			...process.env,
+			PI_AGENTS_ROOT: agentsRoot,
+			PI_AGENTS_SESSION_ROOT: sessionRoot,
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let client;
+	try {
+		const socketPath = join(agentsRoot, "supervisor.sock");
+		await waitFor(() => existsSync(socketPath));
+		client = await connect(socketPath);
+		const listed = await client.request("list");
+		assert.deepEqual(
+			listed.map((job) => job.sessionId),
+			Array.from({ length: 10 }, (_, index) => `canonical-${11 - index}`),
+		);
+
+		writeSession(12);
+		const refreshed = await client.request("list");
+		assert.deepEqual(
+			refreshed.map((job) => job.sessionId),
+			Array.from({ length: 10 }, (_, index) => `canonical-${12 - index}`),
+		);
+	} finally {
+		client?.close();
 		await stopProcess(supervisor);
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -612,7 +688,7 @@ test("supervisor launches supported GPT-5.6 workers with max Pro reasoning", {
 	let terminalServer;
 
 	try {
-		assert.equal((await client.request("ping")).protocolVersion, 5);
+		assert.equal((await client.request("ping")).protocolVersion, 6);
 		await assert.rejects(
 			client.request("dispatch", {
 				prompt: "reject unsupported Pro mode",

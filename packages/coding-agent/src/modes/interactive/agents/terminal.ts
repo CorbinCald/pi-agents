@@ -21,14 +21,15 @@ function delay(milliseconds: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function hasBottomEditorBorder(output: string, columns: number, rows: number): boolean {
+function hasBottomEditorBorder(output: string, columns: number | undefined, rows: number): boolean {
 	const lines = output.replaceAll("\r", "").split("\n");
 	const bottom = lines.slice(Math.max(0, lines.length - rows));
 	const borderStart = Math.max(0, bottom.length - 6);
 	return bottom.slice(borderStart).some((line) => {
-		const characters = [...line];
+		const characters = [...line.trimEnd()];
 		return (
-			characters.length === columns &&
+			characters.length >= 3 &&
+			(columns === undefined || characters.length === columns) &&
 			["─", "━", "═", "-"].includes(characters[0] || "") &&
 			characters.every((character) => character === characters[0])
 		);
@@ -49,6 +50,7 @@ async function waitForResizeRedraw(
 			env: environment,
 		});
 		if (hasBottomEditorBorder(stdout, columns, rows)) return;
+		if (!hasBottomEditorBorder(stdout, undefined, rows)) return;
 	}
 }
 
