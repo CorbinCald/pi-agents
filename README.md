@@ -55,6 +55,8 @@ npm run check                 # Lint, format, and type check
 ./pi-test.sh                  # Run Pi Agents from sources
 ```
 
+Keep globally installed development extensions under version control in `.pi/extensions/`. Symlink their `~/.pi/agent/extensions/` installations to the tracked files instead of maintaining untracked copies.
+
 ## Supply-chain hardening
 
 We treat npm dependency changes as reviewed code changes.
