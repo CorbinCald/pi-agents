@@ -35,6 +35,7 @@ const EMPTY_LABELS: Record<AgentStatus, string> = {
 	complete: "No completed sessions.",
 };
 const SPINNER = ["✶", "✳", "✢", "✳"];
+const MAX_VISIBLE_COMPLETE_SESSIONS = 10;
 const QUICK_OPEN_KEYBINDINGS = [
 	"app.agents.open1",
 	"app.agents.open2",
@@ -107,12 +108,27 @@ function shortPath(path: string): string {
 function sorted(records: Iterable<AgentRecord>): AgentRecord[] {
 	const statusRank = new Map(STATUS_ORDER.map((status, index) => [status, index]));
 	return [...records].sort((a, b) => {
+		if (a.status === "complete" && b.status === "complete" && a.updatedAt !== b.updatedAt) {
+			return b.updatedAt - a.updatedAt;
+		}
 		if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
 		const statusDifference = (statusRank.get(a.status) ?? 99) - (statusRank.get(b.status) ?? 99);
 		if (statusDifference) return statusDifference;
 		if (a.order !== b.order) return a.order - b.order;
 		return b.updatedAt - a.updatedAt;
 	});
+}
+
+export function visibleAgentRecords(records: Iterable<AgentRecord>): AgentRecord[] {
+	const allRecords = [...records];
+	const recentCompleteIds = new Set(
+		allRecords
+			.filter((record) => record.status === "complete")
+			.sort((a, b) => b.updatedAt - a.updatedAt)
+			.slice(0, MAX_VISIBLE_COMPLETE_SESSIONS)
+			.map((record) => record.id),
+	);
+	return sorted(allRecords.filter((record) => record.status !== "complete" || recentCompleteIds.has(record.id)));
 }
 
 function fitToWidth(line: string, width: number, ellipsis = "…"): string {
@@ -169,7 +185,7 @@ class AgentViewComponent implements Component, Focusable {
 		this.options = options;
 		this.done = done;
 		for (const job of initialJobs) this.jobs.set(job.id, job);
-		this.selectedId = sorted(this.jobs.values())[0]?.id;
+		this.selectedId = visibleAgentRecords(this.jobs.values())[0]?.id;
 		this.border = new DynamicBorder((text: string) => theme.fg("border", text));
 		this.promptEditor = new Editor(
 			tui,
@@ -214,12 +230,13 @@ class AgentViewComponent implements Component, Focusable {
 	}
 
 	private orderedJobs(): AgentRecord[] {
-		return sorted(this.jobs.values());
+		return visibleAgentRecords(this.jobs.values());
 	}
 
 	private ensureSelection(): void {
-		if (this.selectedId && this.jobs.has(this.selectedId)) return;
-		this.selectedId = this.orderedJobs()[0]?.id;
+		const jobs = this.orderedJobs();
+		if (this.selectedId && jobs.some((job) => job.id === this.selectedId)) return;
+		this.selectedId = jobs[0]?.id;
 	}
 
 	private handleSupervisorEvent(event: SupervisorEvent): void {

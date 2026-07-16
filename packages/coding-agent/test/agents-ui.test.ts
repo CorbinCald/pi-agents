@@ -4,7 +4,13 @@ import type { ExtensionContext } from "../src/core/extensions/types.ts";
 import type { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { SupervisorClient } from "../src/modes/interactive/agents/client.ts";
 import { shouldExitAgentHost } from "../src/modes/interactive/agents/index.ts";
-import { type AgentViewOptions, type AgentViewResult, showAgentView } from "../src/modes/interactive/agents/ui.ts";
+import type { AgentRecord, AgentStatus } from "../src/modes/interactive/agents/types.ts";
+import {
+	type AgentViewOptions,
+	type AgentViewResult,
+	showAgentView,
+	visibleAgentRecords,
+} from "../src/modes/interactive/agents/ui.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
 const PASSTHROUGH_TIMEOUT = 25;
@@ -102,6 +108,34 @@ function createAgentViewHarness(input: string): {
 	};
 }
 
+function makeAgent(
+	id: string,
+	status: AgentStatus,
+	timestamp: number,
+	overrides: Partial<AgentRecord> = {},
+): AgentRecord {
+	return {
+		id,
+		name: id,
+		prompt: `Prompt for ${id}`,
+		originalCwd: "/tmp",
+		cwd: "/tmp",
+		thinkingLevel: "medium",
+		status,
+		summary: id,
+		createdAt: timestamp,
+		updatedAt: timestamp,
+		...(status === "complete" ? { completedAt: timestamp } : {}),
+		pinned: false,
+		order: timestamp,
+		userRenamed: false,
+		isRunning: status === "working",
+		isStreaming: status === "working",
+		isolated: false,
+		...overrides,
+	};
+}
+
 describe("Agents workspace commands", () => {
 	it("hands slash input from the bare workspace to the native command editor", async () => {
 		const harness = createAgentViewHarness("/");
@@ -115,5 +149,39 @@ describe("Agents workspace commands", () => {
 		expect(shouldExitAgentHost(true, { type: "prefill", text: "/" })).toBe(false);
 		expect(shouldExitAgentHost(true, { type: "close" })).toBe(true);
 		expect(shouldExitAgentHost(false, { type: "close" })).toBe(false);
+	});
+});
+
+describe("visibleAgentRecords", () => {
+	it("keeps every active session and only the 10 most recently edited complete sessions", () => {
+		const records = [
+			makeAgent("needs-input", "needs_input", 100),
+			makeAgent("working", "working", 100),
+			...Array.from({ length: 12 }, (_, index) =>
+				makeAgent(`complete-${index + 1}`, "complete", index + 1, {
+					completedAt: 100 - index,
+					pinned: index === 0,
+				}),
+			),
+		];
+
+		const visible = visibleAgentRecords(records);
+		const completedIds = visible.filter((record) => record.status === "complete").map((record) => record.id);
+
+		expect(visible.some((record) => record.id === "needs-input")).toBe(true);
+		expect(visible.some((record) => record.id === "working")).toBe(true);
+		expect(completedIds).toEqual(Array.from({ length: 10 }, (_, index) => `complete-${12 - index}`));
+		expect(completedIds).not.toContain("complete-1");
+		expect(completedIds).not.toContain("complete-2");
+	});
+
+	it("keeps complete after the active status groups", () => {
+		const visible = visibleAgentRecords([
+			makeAgent("working", "working", 3),
+			makeAgent("needs-input", "needs_input", 2),
+			makeAgent("complete", "complete", 1),
+		]);
+
+		expect(visible.map((record) => record.status)).toEqual(["needs_input", "working", "complete"]);
 	});
 });

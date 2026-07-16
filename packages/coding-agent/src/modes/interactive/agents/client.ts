@@ -20,7 +20,7 @@ const SUPERVISOR_RUNTIME = /^(node|nodejs)(\.exe)?$/.test(basename(process.execP
 const CONNECT_TIMEOUT_MS = 7_500;
 const REQUEST_TIMEOUT_MS = 120_000;
 const SUPERVISOR_UPGRADE_TIMEOUT_MS = 5_000;
-const MIN_SUPERVISOR_PROTOCOL_VERSION = 4;
+const MIN_SUPERVISOR_PROTOCOL_VERSION = 5;
 
 type Listener = (event: SupervisorEvent) => void;
 type PendingRequest = {

@@ -28,6 +28,7 @@
 - Changed `ModelRuntime` to own final request assembly: `getAuth(model)` includes configured model headers, stream methods resolve auth once, and `before_provider_headers` runs as the Models-only header transform before provider dispatch.
 - Changed `/model` to render the current model snapshot immediately, refresh configured providers in the background, and update the open selector with partial results or timeout errors.
 - Changed the default system prompt to identify Pi Agents, establish `CorbinCald/pi-agents` and its bundled docs as authoritative, distinguish upstream lineage and compatibility package names, and route Agents workspace questions to `docs/agents.md`.
+- Changed the Agents workspace to show the 10 most recently edited Complete sessions newest first after the active groups and automatically stop sessions that remain working for more than one hour.
 
 ### Fixed
 

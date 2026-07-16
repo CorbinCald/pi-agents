@@ -22,7 +22,7 @@ Agents is included in `@earendil-works/pi-coding-agent`; it does not require a s
 
 Each managed session is a real interactive Pi process. When attached, native commands, configured keybindings, model controls, tools, images, external editors, and extensions continue to work normally.
 
-All canonical sessions that `/resume` can discover are also listed in Agents. Opening an existing session starts or reconnects its managed native Pi process. Pressing `/` in Agents returns to Pi's native command editor, including from the central bare-startup workspace; `/agents` opens Agents again.
+Agents lists every active canonical session and the 10 most recently edited Complete sessions. Older transcripts remain available through `/resume`. Opening a listed session starts or reconnects its managed native Pi process. Pressing `/` in Agents returns to Pi's native command editor, including from the central bare-startup workspace; `/agents` opens Agents again.
 
 ## Workspace Controls
 
@@ -53,9 +53,11 @@ Context compaction uses `openai/gpt-5.6-luna` at high reasoning effort regardles
 
 - **Needs Input** — the session is waiting for a decision or missing information.
 - **Working** — the session is generating, using tools, retrying, or processing queued input.
-- **Complete** — the turn finished, stopped, or failed.
+- **Complete** — the turn finished, stopped, or failed. Complete appears after the active groups and shows the 10 most recently edited sessions, newest first.
 
 When a turn settles, Agents uses `openai/gpt-5.6-luna` at medium reasoning effort to classify the state and write a concise recap. This incurs normal provider usage. The recap appears as a native Pi widget when the session is opened.
+
+A session that remains **Working** for more than one hour is stopped automatically. Its transcript, metadata, branch, and worktree are retained.
 
 ## Isolation and Deletion
 

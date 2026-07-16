@@ -304,7 +304,7 @@ test("supervisor discovers, resumes, and retains canonical Pi sessions", {
 	try {
 		await waitFor(() => existsSync(join(agentsRoot, "supervisor.sock")));
 		client = await connect(join(agentsRoot, "supervisor.sock"));
-		assert.equal((await client.request("ping")).protocolVersion, 4);
+		assert.equal((await client.request("ping")).protocolVersion, 5);
 		const listed = await client.request("list");
 		assert.equal(listed.length, 1);
 		assert.equal(listed[0].sessionFile, sessionFile);
@@ -337,6 +337,123 @@ test("supervisor discovers, resumes, and retains canonical Pi sessions", {
 		await stopProcess(supervisor);
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("supervisor stops sessions that work longer than the one-hour limit", {
+	timeout: 10_000,
+}, async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-agents-working-timeout-test-"));
+	const agentsRoot = join(root, "agents");
+	const jobId = "workingtimeout";
+	const jobDir = join(agentsRoot, "jobs", jobId);
+	mkdirSync(jobDir, { recursive: true });
+	writeFileSync(
+		join(jobDir, "state.json"),
+		`${JSON.stringify(
+			{
+				id: jobId,
+				name: "Working timeout",
+				prompt: "Previously completed task",
+				originalCwd: root,
+				cwd: root,
+				model: { provider: "fake", id: "fake" },
+				thinkingLevel: "medium",
+				status: "complete",
+				summary: "Complete",
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				completedAt: Date.now(),
+				pinned: false,
+				order: 1,
+				userRenamed: false,
+				isRunning: false,
+				isStreaming: false,
+				isolated: false,
+				projectTrusted: true,
+			},
+			null,
+			2,
+		)}\n`,
+	);
+
+	const supervisor = spawn(process.execPath, [supervisorPath], {
+		env: {
+			...process.env,
+			PI_AGENTS_ROOT: agentsRoot,
+			PI_AGENTS_PI_INVOCATION: JSON.stringify({
+				command: process.execPath,
+				argsPrefix: [fakePiPath],
+			}),
+			PI_AGENTS_TEST_WORKING_SESSION_TIMEOUT_MS: "100",
+			PI_AGENTS_TEST_WORKING_SESSION_POLL_MS: "20",
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let supervisorError = "";
+	supervisor.stderr.on(
+		"data",
+		(chunk) => (supervisorError += chunk.toString()),
+	);
+	const socketPath = join(agentsRoot, "supervisor.sock");
+	let client;
+	let terminalServer;
+
+	try {
+		await waitFor(() => existsSync(socketPath));
+		client = await connect(socketPath);
+		const prepared = await client.request("prepare_attach", { jobId });
+		terminalServer = prepared.terminalServer;
+		const workerPid = Number(
+			execFileSync(
+				"tmux",
+				[
+					"-L",
+					prepared.terminalServer,
+					"display-message",
+					"-p",
+					"-t",
+					prepared.terminalSession,
+					"#{pane_pid}",
+				],
+				{ encoding: "utf8" },
+			).trim(),
+		);
+		const working = await client.request("worker_event", {
+			jobId,
+			workerPid,
+			eventType: "agent_start",
+		});
+		assert.equal(working.status, "working");
+		assert.equal(typeof working.workingStartedAt, "number");
+
+		const stopped = await waitFor(async () => {
+			const records = await client.request("list");
+			const job = records.find((record) => record.id === jobId);
+			return job?.stopped && !job.isRunning ? job : undefined;
+		}, 1_000);
+		assert.equal(stopped.status, "complete");
+		assert.equal(stopped.summary, "Stopped after exceeding the 1-hour limit");
+		assert.equal(stopped.workingStartedAt, undefined);
+		assert.equal(
+			tmuxSessionExists(stopped.terminalServer, stopped.terminalSession),
+			false,
+		);
+	} finally {
+		client?.close();
+		if (terminalServer) {
+			try {
+				execFileSync("tmux", ["-L", terminalServer, "kill-server"], {
+					stdio: "ignore",
+				});
+			} catch {
+				// The timed-out session normally stops the private server.
+			}
+		}
+		await stopProcess(supervisor);
+		rmSync(root, { recursive: true, force: true });
+	}
+
+	assert.equal(supervisorError, "");
 });
 
 test("idle cleanup never stops a pending or attached terminal", {
@@ -495,7 +612,7 @@ test("supervisor launches supported GPT-5.6 workers with max Pro reasoning", {
 	let terminalServer;
 
 	try {
-		assert.equal((await client.request("ping")).protocolVersion, 4);
+		assert.equal((await client.request("ping")).protocolVersion, 5);
 		await assert.rejects(
 			client.request("dispatch", {
 				prompt: "reject unsupported Pro mode",

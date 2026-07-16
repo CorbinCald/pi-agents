@@ -24,6 +24,7 @@ export interface AgentRecord {
 	recapPending?: boolean;
 	waitingFor?: string;
 	createdAt: number;
+	workingStartedAt?: number;
 	updatedAt: number;
 	completedAt?: number;
 	pinned: boolean;

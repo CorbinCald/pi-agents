@@ -40,7 +40,7 @@ const SESSION_ROOT =
 const WORKTREES_DIR = join(ROOT, "worktrees");
 const RECAP_MODEL = "openai/gpt-5.6-luna";
 const RECAP_THINKING = "medium";
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 const MAX_RECAP_INPUT_CHARS = 48_000;
 const MAX_EVENT_TEXT_CHARS = 24_000;
 const RECAP_TIMEOUT_MS = 180_000;
@@ -52,6 +52,16 @@ const IDLE_WORKER_POLL_MS = durationFromEnvironment(
 	"PI_AGENTS_TEST_IDLE_WORKER_POLL_MS",
 	60_000,
 );
+const WORKING_SESSION_TIMEOUT_MS = durationFromEnvironment(
+	"PI_AGENTS_TEST_WORKING_SESSION_TIMEOUT_MS",
+	60 * 60 * 1_000,
+);
+const WORKING_SESSION_POLL_MS = durationFromEnvironment(
+	"PI_AGENTS_TEST_WORKING_SESSION_POLL_MS",
+	60_000,
+);
+const WORKING_SESSION_TIMEOUT_SUMMARY =
+	"Stopped after exceeding the 1-hour limit";
 const ATTACH_RESERVATION_MS = durationFromEnvironment(
 	"PI_AGENTS_TEST_ATTACH_RESERVATION_MS",
 	15_000,
@@ -230,7 +240,14 @@ function loadJobs() {
 			parsed.isRunning = false;
 			parsed.isStreaming = false;
 			if (parsed.status === "working") {
+				if (!Number.isFinite(parsed.workingStartedAt)) {
+					parsed.workingStartedAt = Number.isFinite(parsed.updatedAt)
+						? parsed.updatedAt
+						: Date.now();
+				}
 				parsed.summary = "Restoring interrupted background session…";
+			} else {
+				delete parsed.workingStartedAt;
 			}
 			jobs.set(parsed.id, parsed);
 			generations.set(parsed.id, 0);
@@ -743,6 +760,7 @@ function handleTerminalWorkerEvent(job, eventType, data = {}) {
 			nextGeneration(job.id);
 			resetTerminalCompletionState(job);
 			job.status = "working";
+			job.workingStartedAt = Date.now();
 			job.isStreaming = true;
 			job.summary = "Working…";
 			emitState(job);
@@ -767,15 +785,18 @@ function handleTerminalWorkerEvent(job, eventType, data = {}) {
 			if (typeof data.toolName === "string") {
 				if (job.status !== "working" || job.stopped || !job.isStreaming) {
 					nextGeneration(job.id);
+					job.workingStartedAt = Date.now();
 				}
 				resetTerminalCompletionState(job);
 				job.summary = formatToolActivity(data.toolName, data.args);
 				if (/ask|question|confirm|input/i.test(data.toolName)) {
 					job.status = "needs_input";
+					delete job.workingStartedAt;
 					job.waitingFor = "The session is waiting for input";
 					job.isStreaming = false;
 				} else {
 					job.status = "working";
+					job.workingStartedAt ??= Date.now();
 					job.isStreaming = true;
 				}
 				emitState(job);
@@ -826,6 +847,7 @@ function handleTerminalWorkerEvent(job, eventType, data = {}) {
 			nextGeneration(job.id);
 			terminalRunning.delete(job.id);
 			terminalWorkerPids.delete(job.id);
+			delete job.workingStartedAt;
 			if (job.terminalStopping) {
 				persistJob(job);
 				broadcast({ type: "event", event: "state", job: publicJob(job) });
@@ -997,6 +1019,7 @@ function fallbackRecap(job) {
 async function createCompletionRecap(job) {
 	const generation = currentGeneration(job.id);
 	job.status = "complete";
+	delete job.workingStartedAt;
 	job.recapPending = true;
 	job.summary = "Preparing completion recap…";
 	job.completedAt = Date.now();
@@ -1207,6 +1230,7 @@ async function dispatchJob(request) {
 		status: "working",
 		summary: "Creating isolated worktree…",
 		createdAt: now,
+		workingStartedAt: now,
 		updatedAt: now,
 		pinned: false,
 		order:
@@ -1231,6 +1255,7 @@ async function dispatchJob(request) {
 		emitState(job);
 	} catch (error) {
 		job.status = "complete";
+		delete job.workingStartedAt;
 		job.failed = true;
 		job.error = compactText(error?.stderr || error?.message || error, 1_000);
 		job.summary = compactText(job.error, 96);
@@ -1240,14 +1265,15 @@ async function dispatchJob(request) {
 	return publicJob(job);
 }
 
-async function stopJob(job) {
+async function stopJob(job, summary = "Stopped by user") {
 	nextGeneration(job.id);
 	await stopTerminal(job);
 	job.status = "complete";
+	delete job.workingStartedAt;
 	job.stopped = true;
 	job.isStreaming = false;
 	job.recapPending = false;
-	job.summary = "Stopped by user";
+	job.summary = summary;
 	job.completedAt = Date.now();
 	emitState(job);
 	return publicJob(job);
@@ -1459,6 +1485,7 @@ const terminalPollTimer = setInterval(() => {
 			job.isStreaming = false;
 			if (job.status === "working" || job.status === "needs_input") {
 				job.status = "complete";
+				delete job.workingStartedAt;
 				job.failed = true;
 				job.error = "Native Pi session exited unexpectedly";
 				job.summary = job.error;
@@ -1468,6 +1495,29 @@ const terminalPollTimer = setInterval(() => {
 		});
 	}
 }, 2_000);
+
+function workingSessionExpired(job, now = Date.now()) {
+	return (
+		job.status === "working" &&
+		Number.isFinite(job.workingStartedAt) &&
+		job.workingStartedAt < now - WORKING_SESSION_TIMEOUT_MS
+	);
+}
+
+const workingSessionTimer = setInterval(() => {
+	const now = Date.now();
+	for (const job of jobs.values()) {
+		if (
+			!terminalRunning.has(job.id) ||
+			job.terminalStopping ||
+			!workingSessionExpired(job, now)
+		)
+			continue;
+		void stopJob(job, WORKING_SESSION_TIMEOUT_SUMMARY).catch((error) => {
+			log(`Could not stop timed-out session ${job.id}`, error);
+		});
+	}
+}, WORKING_SESSION_POLL_MS);
 
 const idleWorkerTimer = setInterval(() => {
 	for (const job of jobs.values()) {
@@ -1504,8 +1554,13 @@ const idleWorkerTimer = setInterval(() => {
 async function restoreInterruptedJobs() {
 	for (const job of jobs.values()) {
 		try {
-			if (await hasTerminalSession(job)) {
-				terminalRunning.add(job.id);
+			const terminalExists = await hasTerminalSession(job);
+			if (terminalExists) terminalRunning.add(job.id);
+			if (workingSessionExpired(job)) {
+				await stopJob(job, WORKING_SESSION_TIMEOUT_SUMMARY);
+				continue;
+			}
+			if (terminalExists) {
 				broadcast({ type: "event", event: "state", job: publicJob(job) });
 				continue;
 			}
@@ -1518,6 +1573,7 @@ async function restoreInterruptedJobs() {
 			);
 		} catch (error) {
 			job.status = "complete";
+			delete job.workingStartedAt;
 			job.failed = true;
 			job.error = compactText(error?.message || error, 1_000);
 			job.summary = compactText(job.error, 96);
@@ -1529,6 +1585,7 @@ async function restoreInterruptedJobs() {
 function shutdown(code = 0) {
 	if (shuttingDown) return;
 	shuttingDown = true;
+	clearInterval(workingSessionTimer);
 	clearInterval(idleWorkerTimer);
 	clearInterval(terminalPollTimer);
 	for (const socket of clients) socket.destroy();
