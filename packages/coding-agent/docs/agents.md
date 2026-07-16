@@ -22,7 +22,7 @@ Agents is included in `@earendil-works/pi-coding-agent`; it does not require a s
 
 Each managed session is a real interactive Pi process. When attached, native commands, configured keybindings, model controls, tools, images, external editors, and extensions continue to work normally.
 
-All canonical sessions that `/resume` can discover are also listed in Agents. Opening an existing session starts or reconnects its managed native Pi process. When Agents is opened from an attached session, `/` returns to that session's native command editor.
+All canonical sessions that `/resume` can discover are also listed in Agents. Opening an existing session starts or reconnects its managed native Pi process. Pressing `/` in Agents returns to Pi's native command editor, including from the central bare-startup workspace; `/agents` opens Agents again.
 
 ## Workspace Controls
 
@@ -39,7 +39,7 @@ All application actions can be remapped in `~/.pi/agent/keybindings.json`; see [
 | Shift+Up / Shift+Down | Reorder within a status group |
 | Shift+Tab | Cycle dispatch reasoning effort |
 | Ctrl+X | Stop; press again within two seconds to hide |
-| `/` | Return to native commands when opened from a session |
+| `/` | Return to Pi's native command editor |
 | Ctrl+C | Exit the host; managed sessions keep running |
 | Ctrl+Shift+C | Preserve the terminal copy gesture |
 | Escape | Clear the task editor or close Agents |

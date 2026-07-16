@@ -76,7 +76,6 @@ export type AgentViewResult = { type: "close" } | { type: "prefill"; text: strin
 export interface AgentViewOptions {
 	cwd: string;
 	model?: { provider: string; id: string };
-	standalone?: boolean;
 	fullscreen?: boolean;
 	getReasoning: () => DispatchReasoningSelection;
 	cycleReasoning: () => DispatchReasoningSelection;
@@ -271,21 +270,18 @@ class AgentViewComponent implements Component, Focusable {
 			this.attachSelected();
 			return;
 		}
-		if (prompt === "/exit" || prompt === "/quit") {
+		if (prompt === "/exit") {
 			this.done({ type: "close" });
 			return;
 		}
-		if (prompt.startsWith("/")) {
-			if (!this.options.standalone) {
-				this.done({ type: "prefill", text: prompt });
-				return;
-			}
-			this.error =
-				prompt === "/resume"
-					? "Every canonical Pi session is already listed here"
-					: "Open a session before using native Pi commands";
+		if (prompt === "/agents" || prompt.startsWith("/agents ")) {
+			this.error = "Agents is already open";
 			this.promptEditor.setText("");
 			this.tui.requestRender();
+			return;
+		}
+		if (prompt.startsWith("/")) {
+			this.done({ type: "prefill", text: prompt });
 			return;
 		}
 		const model = this.options.model;
@@ -456,7 +452,7 @@ class AgentViewComponent implements Component, Focusable {
 
 	private handleListInput(data: string): void {
 		const inputEmpty = this.promptEditor.getText().length === 0;
-		if (inputEmpty && this.keybindings.matches(data, "app.agents.nativeCommands") && !this.options.standalone) {
+		if (inputEmpty && this.keybindings.matches(data, "app.agents.nativeCommands")) {
 			this.done({ type: "prefill", text: "/" });
 			return;
 		}
@@ -612,12 +608,7 @@ class AgentViewComponent implements Component, Focusable {
 				...visibleContent,
 				...editorLines,
 				this.theme.fg("dim", ` ${this.listFooter()}`),
-				this.theme.fg(
-					"dim",
-					this.options.standalone
-						? " Enter dispatch/open native Pi · /resume sessions are listed · ? help"
-						: " Enter dispatch/open native Pi · / native commands · ? help",
-				),
+				this.theme.fg("dim", " Enter dispatch/open native Pi · / native commands · ? help"),
 			],
 			width,
 		);
@@ -664,9 +655,7 @@ class AgentViewComponent implements Component, Focusable {
 			" Shift+↑ / ↓       Reorder within a category",
 			" Ctrl+X            Stop; press again to delete",
 			" Shift+Tab         Cycle dispatch thinking level",
-			this.options.standalone
-				? " /resume           All canonical sessions are already listed"
-				: " /                 Return to native slash commands",
+			" /                 Return to native slash commands",
 			" Ctrl+C            Exit Pi (agents keep running)",
 			" Ctrl+Shift+C      Terminal copy (does not exit)",
 			" Esc               Clear input or close Agents",

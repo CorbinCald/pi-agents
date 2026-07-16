@@ -35,6 +35,7 @@
 - Fixed adjacent assistant thinking blocks to render as one thinking section.
 - Fixed completed compaction summaries rendering twice in interactive mode.
 - Fixed Agents supervisor startup on tmux versions that do not support `extended-keys-format`.
+- Fixed the central Agents workspace to hand `/` back to Pi's native command editor instead of rejecting slash commands.
 
 ## [0.80.7] - 2026-07-14
 

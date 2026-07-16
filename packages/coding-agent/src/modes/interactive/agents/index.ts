@@ -6,10 +6,14 @@ import { installSinglePressExit, requestSinglePressExit } from "./exit.ts";
 import { DispatchReasoningController, supportsMaxProReasoning, withMaxProReasoning } from "./reasoning.ts";
 import { attachAgentTerminal } from "./terminal.ts";
 import type { AgentRecord, SupervisorEvent } from "./types.ts";
-import { showAgentView } from "./ui.ts";
+import { type AgentViewResult, showAgentView } from "./ui.ts";
 import { registerWorkerIntegration } from "./worker.ts";
 
 const REASONING_STATUS_KEY = "agents-reasoning";
+
+export function shouldExitAgentHost(standalone: boolean, result: AgentViewResult): boolean {
+	return standalone && result.type === "close";
+}
 
 export default function agentsExtension(pi: ExtensionAPI): void {
 	if (process.env.PI_AGENTS_RECAP === "1") return;
@@ -106,8 +110,9 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		viewOpen = true;
+		let exitStandalone = options.standalone === true;
 		try {
-			await showAgentView(context, getClient(), {
+			const outcome = await showAgentView(context, getClient(), {
 				cwd: context.cwd,
 				model: context.model
 					? {
@@ -115,7 +120,6 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 							id: context.model.id,
 						}
 					: undefined,
-				standalone: options.standalone,
 				fullscreen: true,
 				getReasoning: () => dispatchReasoning.getSelection(),
 				cycleReasoning: () => {
@@ -127,11 +131,12 @@ export default function agentsExtension(pi: ExtensionAPI): void {
 				exit: () => requestSinglePressExit(context),
 				attach: (tui, jobId) => attachAgentTerminal(tui, getClient(), jobId),
 			});
+			exitStandalone = shouldExitAgentHost(options.standalone === true, outcome.result);
 		} catch (error) {
 			context.ui.notify(error instanceof Error ? error.message : String(error), "error");
 		} finally {
 			viewOpen = false;
-			if (options.standalone) requestSinglePressExit(context);
+			if (exitStandalone) requestSinglePressExit(context);
 		}
 	};
 
