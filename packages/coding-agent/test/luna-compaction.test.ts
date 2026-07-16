@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSessionServices } from "../src/core/agent-session-services.ts";
 import type { compact } from "../src/core/compaction/index.ts";
@@ -53,7 +54,11 @@ describe("Luna compaction extension", () => {
 			firstKeptEntryId: "kept-entry",
 			tokensBefore: 100,
 		};
-		const compactSession = vi.fn(async () => compaction);
+		let capturedStreamFn: StreamFn | undefined;
+		const compactSession = vi.fn(async (...args: Parameters<typeof compact>) => {
+			capturedStreamFn = args[7];
+			return compaction;
+		});
 		type BeforeCompactHandler = ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>;
 		type CompactHandler = ExtensionHandler<SessionCompactEvent>;
 		const handlers = new Map<string, BeforeCompactHandler | CompactHandler>();
@@ -78,9 +83,11 @@ describe("Luna compaction extension", () => {
 		const signal = new AbortController().signal;
 		const preparation = { firstKeptEntryId: "kept-entry" };
 		const notify = vi.fn();
+		const streamSimple = vi.fn();
 		const context = {
 			modelRegistry: {
 				find: vi.fn(() => model),
+				streamSimple,
 				getApiKeyAndHeaders: vi.fn(async () => ({
 					ok: true,
 					apiKey: "key",
@@ -107,9 +114,15 @@ describe("Luna compaction extension", () => {
 			"focus",
 			signal,
 			LUNA_COMPACTION_THINKING_LEVEL,
-			undefined,
+			expect.any(Function),
 			{ TEST_ENV: "value" },
 		);
+		expect(capturedStreamFn).toBeDefined();
+		const streamContext = { messages: [] };
+		const streamOptions = { maxTokens: 10 };
+		if (!capturedStreamFn) throw new Error("Expected Luna compaction to receive a stream function");
+		capturedStreamFn(model as Parameters<StreamFn>[0], streamContext, streamOptions);
+		expect(streamSimple).toHaveBeenCalledWith(model, streamContext, streamOptions);
 		expect(LUNA_COMPACTION_THINKING_LEVEL).toBe("high");
 		expect(notify).toHaveBeenNthCalledWith(1, "Compacting with GPT-5.6 Luna at high effort", "info");
 		expect(notify).toHaveBeenNthCalledWith(2, "Compacted with GPT-5.6 Luna at high effort", "info");

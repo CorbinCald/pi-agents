@@ -32,6 +32,7 @@ import {
 import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir } from "../config.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
+import { recordAssistantCost } from "./daily-cost.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
@@ -62,6 +63,8 @@ export interface CreateModelRuntimeOptions {
 	modelsPath?: string | null;
 	modelsStore?: ModelsStore;
 	modelsStorePath?: string;
+	/** Append-only cost ledger. Omit to disable process-wide cost tracking. */
+	costLedgerPath?: string;
 	allowModelNetwork?: boolean;
 	modelRefreshTimeoutMs?: number;
 	catalogBaseUrl?: string;
@@ -97,6 +100,7 @@ export class ModelRuntime implements Models {
 	private readonly extensionProviders = new Map<string, ProviderConfigInput>();
 	private readonly compositionErrors = new Map<string, string>();
 	private readonly modelsPath: string | undefined;
+	private readonly costLedgerPath: string | undefined;
 	private readonly allowModelNetwork: boolean;
 	private config: ModelConfig;
 	private snapshot: ModelRuntimeSnapshot = {
@@ -115,11 +119,13 @@ export class ModelRuntime implements Models {
 		modelsPath: string | undefined,
 		modelsStore: ModelsStore,
 		providers: readonly Provider[],
+		costLedgerPath: string | undefined,
 		allowModelNetwork: boolean,
 	) {
 		this.credentials = credentials;
 		this.config = config;
 		this.modelsPath = modelsPath;
+		this.costLedgerPath = costLedgerPath;
 		this.allowModelNetwork = allowModelNetwork;
 		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
@@ -148,6 +154,7 @@ export class ModelRuntime implements Models {
 			modelsPath,
 			modelsStore,
 			providers,
+			options.costLedgerPath,
 			options.allowModelNetwork ?? process.env.PI_OFFLINE === undefined,
 		);
 		runtime.configureRadiusProviders();
@@ -443,22 +450,35 @@ export class ModelRuntime implements Models {
 		};
 	}
 
+	private trackCost(stream: AssistantMessageEventStream): AssistantMessageEventStream {
+		const ledgerPath = this.costLedgerPath;
+		if (ledgerPath) {
+			void stream
+				.result()
+				.then((message) => recordAssistantCost(ledgerPath, message))
+				.catch(() => {});
+		}
+		return stream;
+	}
+
 	stream<TApi extends Api>(
 		model: Model<TApi>,
 		context: Context,
 		options?: ModelsApiStreamOptions<TApi>,
 	): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
-			const prepared = await this.prepareRequest(
-				model,
-				options as (StreamOptions & ModelsStreamTransforms) | undefined,
-			);
-			return prepared.provider.stream(
-				prepared.model as Model<TApi>,
-				context,
-				prepared.options as ApiStreamOptions<TApi>,
-			);
-		});
+		return this.trackCost(
+			lazyStream(model, async () => {
+				const prepared = await this.prepareRequest(
+					model,
+					options as (StreamOptions & ModelsStreamTransforms) | undefined,
+				);
+				return prepared.provider.stream(
+					prepared.model as Model<TApi>,
+					context,
+					prepared.options as ApiStreamOptions<TApi>,
+				);
+			}),
+		);
 	}
 
 	complete<TApi extends Api>(
@@ -470,10 +490,12 @@ export class ModelRuntime implements Models {
 	}
 
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
-			const prepared = await this.prepareRequest(model, options);
-			return prepared.provider.streamSimple(prepared.model, context, prepared.options as SimpleStreamOptions);
-		});
+		return this.trackCost(
+			lazyStream(model, async () => {
+				const prepared = await this.prepareRequest(model, options);
+				return prepared.provider.streamSimple(prepared.model, context, prepared.options as SimpleStreamOptions);
+			}),
+		);
 	}
 
 	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage> {

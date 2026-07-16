@@ -1,8 +1,9 @@
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
-import { getAgentDir } from "../config.ts";
+import { getAgentDir, getCostLedgerPath, getSessionsDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
+import { seedDailyCostLedger } from "./daily-cost.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { lunaCompactionExtension } from "./extensions/luna-compaction.ts";
 import { ModelRuntime } from "./model-runtime.ts";
@@ -137,11 +138,19 @@ export async function createAgentSessionServices(
 ): Promise<AgentSessionServices> {
 	const cwd = resolvePath(options.cwd);
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getAgentDir();
+	if (!options.modelRuntime) {
+		try {
+			await seedDailyCostLedger(getCostLedgerPath(agentDir), getSessionsDir(agentDir));
+		} catch {
+			// Accounting must not prevent runtime initialization.
+		}
+	}
 	const modelRuntime =
 		options.modelRuntime ??
 		(await ModelRuntime.create({
 			authPath: join(agentDir, "auth.json"),
 			modelsPath: join(agentDir, "models.json"),
+			costLedgerPath: getCostLedgerPath(agentDir),
 		}));
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const resourceLoaderOptions = options.resourceLoaderOptions ?? {};

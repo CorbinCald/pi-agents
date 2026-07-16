@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { AuthStatus, ProviderConfigInput } from "./provider-composer.ts";
 
@@ -106,6 +106,11 @@ export class ModelRegistry {
 
 	isUsingOAuth(model: Model<Api>): boolean {
 		return this.runtime.isUsingOAuth(model.provider);
+	}
+
+	/** Stream through the configured runtime, including request assembly and accounting. */
+	streamSimple(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
+		return this.runtime.streamSimple(model, context, options);
 	}
 
 	registerProvider(providerName: string, config: ProviderConfigInput): void {

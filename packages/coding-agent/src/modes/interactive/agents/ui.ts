@@ -7,6 +7,8 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { getCostLedgerPath } from "../../../config.ts";
+import { DailyCostTracker, formatDailyCost } from "../../../core/daily-cost.ts";
 import type { ExtensionContext } from "../../../core/extensions/types.ts";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
 import { DynamicBorder } from "../components/dynamic-border.ts";
@@ -140,6 +142,18 @@ function fill(line: string, width: number): string {
 	return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
 }
 
+export function alignDailyCostFooter(help: string, cost: number, width: number): string {
+	const safeWidth = Math.max(1, width);
+	const costLabel = formatDailyCost(cost);
+	const costWidth = visibleWidth(costLabel);
+	if (costWidth >= safeWidth) return fitToWidth(costLabel, safeWidth, "");
+
+	const availableHelpWidth = safeWidth - costWidth - 1;
+	const clippedHelp = fitToWidth(help, availableHelpWidth);
+	const padding = " ".repeat(Math.max(1, safeWidth - visibleWidth(clippedHelp) - costWidth));
+	return fitToWidth(`${clippedHelp}${padding}${costLabel}`, safeWidth, "");
+}
+
 function colorize(color: AgentColor, text: string): string {
 	const [red, green, blue] = COLOR_RGB[color];
 	return `\u001b[38;2;${red};${green};${blue}m${text}\u001b[39m`;
@@ -167,6 +181,7 @@ class AgentViewComponent implements Component, Focusable {
 	private readonly keybindings: KeybindingsManager;
 	private readonly client: SupervisorClient;
 	private readonly options: AgentViewOptions;
+	private readonly dailyCostTracker: DailyCostTracker;
 	private readonly done: (result: AgentViewResult) => void;
 
 	constructor(
@@ -176,6 +191,7 @@ class AgentViewComponent implements Component, Focusable {
 		client: SupervisorClient,
 		options: AgentViewOptions,
 		initialJobs: AgentRecord[],
+		dailyCostTracker: DailyCostTracker,
 		done: (result: AgentViewResult) => void,
 	) {
 		this.tui = tui;
@@ -183,6 +199,7 @@ class AgentViewComponent implements Component, Focusable {
 		this.keybindings = keybindings;
 		this.client = client;
 		this.options = options;
+		this.dailyCostTracker = dailyCostTracker;
 		this.done = done;
 		for (const job of initialJobs) this.jobs.set(job.id, job);
 		this.selectedId = visibleAgentRecords(this.jobs.values())[0]?.id;
@@ -625,7 +642,14 @@ class AgentViewComponent implements Component, Focusable {
 				...visibleContent,
 				...editorLines,
 				this.theme.fg("dim", ` ${this.listFooter()}`),
-				this.theme.fg("dim", " Enter dispatch/open native Pi · / native commands · ? help"),
+				this.theme.fg(
+					"dim",
+					alignDailyCostFooter(
+						" Enter dispatch/open native Pi · / native commands · ? help",
+						this.dailyCostTracker.getTotal(),
+						width,
+					),
+				),
 			],
 			width,
 		);
@@ -738,6 +762,7 @@ export async function showAgentView(
 	await client.connect(true);
 	const listedJobs = await client.list();
 	const initialJobs = Array.isArray(listedJobs) ? listedJobs : [];
+	const dailyCostTracker = new DailyCostTracker(getCostLedgerPath());
 	let activeTui: TUI | undefined;
 	const result = await ctx.ui.custom<AgentViewResult>(
 		(tui, theme, keybindings, done) => {
@@ -746,7 +771,7 @@ export async function showAgentView(
 				done(result);
 				if (result.type === "prefill") ctx.ui.setEditorText(result.text);
 			};
-			return new AgentViewComponent(tui, theme, keybindings, client, options, initialJobs, finish);
+			return new AgentViewComponent(tui, theme, keybindings, client, options, initialJobs, dailyCostTracker, finish);
 		},
 		{ fullscreen: options.fullscreen },
 	);

@@ -52,7 +52,7 @@ export function createLunaCompactionExtension(compactSession: typeof compact = c
 					event.customInstructions,
 					event.signal,
 					LUNA_COMPACTION_THINKING_LEVEL,
-					undefined,
+					(model, context, options) => ctx.modelRegistry.streamSimple(model, context, options),
 					auth.env,
 				);
 

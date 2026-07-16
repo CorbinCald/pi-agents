@@ -22,6 +22,8 @@ Agents is included in `@earendil-works/pi-coding-agent`; it does not require a s
 
 Each managed session is a real interactive Pi process. When attached, native commands, configured keybindings, model controls, tools, images, external editors, and extensions continue to work normally.
 
+The bottom-right `Today $…` indicator sums Pi's estimated LLM costs since midnight in the host's current time zone. It includes foreground and background sessions plus internal model calls such as compaction and completion recaps. Subscription-model values remain pricing estimates rather than incremental subscription charges.
+
 Agents lists every active canonical session and the 10 most recently edited Complete sessions. Older transcripts remain available through `/resume`. Opening a listed session starts or reconnects its managed native Pi process. Pressing `/` in Agents returns to Pi's native command editor, including from the central bare-startup workspace; `/agents` opens Agents again.
 
 ## Workspace Controls
@@ -81,6 +83,8 @@ Canonical transcripts remain under Pi's standard per-project namespace:
 ```
 
 Agents, `/resume`, and `--session` therefore use one session inventory. On first startup after migration from the historical extension, transcripts under `~/.pi/agent/agents/sessions/` move into the canonical namespace. Filename collisions never overwrite either transcript.
+
+The cross-session cost ledger is stored at `~/.pi/agent/costs.jsonl`. Pi appends completed model-call costs from concurrent processes and backfills the current day's canonical transcripts when needed.
 
 Agents-specific runtime state remains under:
 

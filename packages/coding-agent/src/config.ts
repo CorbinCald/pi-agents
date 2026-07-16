@@ -567,8 +567,13 @@ export function getPromptsDir(): string {
 }
 
 /** Get path to sessions directory */
-export function getSessionsDir(): string {
-	return join(getAgentDir(), "sessions");
+export function getSessionsDir(agentDir: string = getAgentDir()): string {
+	return join(agentDir, "sessions");
+}
+
+/** Get path to the append-only LLM cost ledger. */
+export function getCostLedgerPath(agentDir: string = getAgentDir()): string {
+	return join(agentDir, "costs.jsonl");
 }
 
 /** Get path to debug log file */

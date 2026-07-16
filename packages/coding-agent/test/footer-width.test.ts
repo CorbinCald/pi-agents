@@ -1,6 +1,11 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
+import { DailyCostTracker, recordAssistantCost } from "../src/core/daily-cost.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
 import { FooterComponent, formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -122,6 +127,40 @@ describe("FooterComponent width handling", () => {
 		const lines = footer.render(width);
 		for (const line of lines) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+	});
+
+	it("shows the daily aggregate cost", () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "pi-footer-daily-cost-"));
+		const ledgerPath = join(tempDir, "costs.jsonl");
+		const message = {
+			role: "assistant",
+			content: [{ type: "text", text: "done" }],
+			api: "test",
+			provider: "test",
+			model: "test-model",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 1.234, output: 0, cacheRead: 0, cacheWrite: 0, total: 1.234 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		} satisfies AssistantMessage;
+
+		try {
+			recordAssistantCost(ledgerPath, message);
+			const footer = new FooterComponent(
+				createSession({ sessionName: "" }),
+				createFooterData(1),
+				new DailyCostTracker(ledgerPath, 0),
+			);
+			expect(stripAnsi(footer.render(120)[1])).toContain("Today $1.234");
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
 		}
 	});
 

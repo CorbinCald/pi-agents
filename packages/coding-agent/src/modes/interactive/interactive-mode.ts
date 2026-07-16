@@ -46,6 +46,7 @@ import {
 	CONFIG_DIR_NAME,
 	getAgentDir,
 	getAuthPath,
+	getCostLedgerPath,
 	getDebugLogPath,
 	getDocsPath,
 	getShareViewerUrl,
@@ -60,6 +61,7 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
+import { DailyCostTracker } from "../../core/daily-cost.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -471,7 +473,11 @@ export class InteractiveMode {
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
-		this.footer = new FooterComponent(this.session, this.footerDataProvider);
+		this.footer = new FooterComponent(
+			this.session,
+			this.footerDataProvider,
+			new DailyCostTracker(getCostLedgerPath(this.runtimeHost.services.agentDir)),
+		);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 
 		// Load hide thinking block setting

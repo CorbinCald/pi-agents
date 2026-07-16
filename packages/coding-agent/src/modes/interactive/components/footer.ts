@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
+import { type DailyCostTracker, formatDailyCost } from "../../../core/daily-cost.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { theme } from "../theme/theme.ts";
@@ -50,10 +51,12 @@ export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
+	private dailyCostTracker: DailyCostTracker | undefined;
 
-	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
+	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider, dailyCostTracker?: DailyCostTracker) {
 		this.session = session;
 		this.footerData = footerData;
+		this.dailyCostTracker = dailyCostTracker;
 	}
 
 	setSession(session: AgentSession): void {
@@ -142,6 +145,9 @@ export class FooterComponent implements Component {
 		if (totalCost || usingSubscription) {
 			const costStr = `$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
 			statsParts.push(costStr);
+		}
+		if (this.dailyCostTracker) {
+			statsParts.push(formatDailyCost(this.dailyCostTracker.getTotal()));
 		}
 
 		// Colorize context percentage based on usage
