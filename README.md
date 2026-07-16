@@ -6,7 +6,7 @@ Pi Agents is an independent Pi distribution with a built-in persistent Agents wo
 
 The existing `@earendil-works/*` package names are compatibility identifiers. They do not designate repository ownership or an approved release or update channel.
 
-Start with the Pi Agents [documentation](packages/coding-agent/docs/index.md).
+Start with the Pi Agents, noting that they may diverge from the current state of pi-agents [documentation](packages/coding-agent/docs/index.md).
 
 ## Packages
 
@@ -22,16 +22,6 @@ Start with the Pi Agents [documentation](packages/coding-agent/docs/index.md).
 
 Pi Agents does not include a built-in permission system for restricting filesystem, process, network, or credential access. By default, it runs with the permissions of the user and process that launched it.
 
-If you need stronger boundaries, containerize or sandbox Pi. See [packages/coding-agent/docs/containerization.md](packages/coding-agent/docs/containerization.md) for three patterns:
-
-- **Gondolin extension**: keep `pi` and provider auth on the host while routing built-in tools and `!` commands into a local Linux micro-VM.
-- **Plain Docker**: run the whole `pi` process in a local container for simple isolation.
-- **OpenShell**: run the whole `pi` process in a policy-controlled sandbox.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules. File issues and pull requests against [CorbinCald/pi-agents](https://github.com/CorbinCald/pi-agents).
-
 ## Development
 
 ```bash
@@ -45,20 +35,6 @@ npm run check                 # Lint, format, and type check
 ```
 
 Keep globally installed development extensions under version control in `.pi/extensions/`. Symlink their `~/.pi/agent/extensions/` installations to the tracked files instead of maintaining untracked copies.
-
-## Supply-chain hardening
-
-We treat npm dependency changes as reviewed code changes.
-
-- Direct external dependencies are pinned to exact versions. Internal workspace packages remain version-ranged.
-- `.npmrc` sets `save-exact=true` and `min-release-age=2` to avoid same-day dependency releases during npm resolution.
-- `package-lock.json` is the dependency ground truth. Pre-commit blocks accidental lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1` is set.
-- `npm run check` verifies pinned direct deps, native TypeScript import compatibility, and the generated coding-agent shrinkwrap.
-- Packaged CLI artifacts include `packages/coding-agent/npm-shrinkwrap.json`, generated from the root lockfile, to pin transitive dependencies.
-- Release smoke tests use `npm run release:local` to build, pack, and create isolated npm and Bun installs outside the repo before tagging a release.
-- Local release installs, documented npm installs, and `pi update --self` use `--ignore-scripts` where supported.
-- CI installs with `npm ci --ignore-scripts`, and a scheduled GitHub workflow runs `npm audit --omit=dev` plus `npm audit signatures --omit=dev`.
-- Shrinkwrap generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
 
 ## License
 
