@@ -15,11 +15,16 @@ import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
 const PASSTHROUGH_TIMEOUT = 25;
 
-function createAgentViewHarness(input: string): {
+function createAgentViewHarness(
+	input: string,
+	captureScreens = false,
+): {
 	open: () => ReturnType<typeof showAgentView>;
 	getEditorText: () => string | undefined;
+	getScreens: () => { list: string; afterInput: string } | undefined;
 } {
 	let editorText: string | undefined;
+	let screens: { list: string; afterInput: string } | undefined;
 	const fakeTui = {
 		terminal: { rows: 30 },
 		requestRender() {},
@@ -37,7 +42,12 @@ function createAgentViewHarness(input: string): {
 	};
 	const keybindings = {
 		matches(data: string, action: string) {
-			return data === "/" && action === "app.agents.nativeCommands";
+			return (
+				(data === "/" && action === "app.agents.nativeCommands") || (data === "?" && action === "app.agents.help")
+			);
+		},
+		getKeys(action: string) {
+			return action === "app.agents.color" ? ["alt+c"] : [];
 		},
 	};
 	const client = {
@@ -77,6 +87,15 @@ function createAgentViewHarness(input: string): {
 							keybindings as KeybindingsManager,
 							done,
 						);
+						if (captureScreens) {
+							const list = component.render(100).join("\n");
+							component.handleInput?.(input);
+							screens = { list, afterInput: component.render(100).join("\n") };
+							clearTimeout(timeout);
+							component.dispose?.();
+							resolve({ type: "close" });
+							return;
+						}
 						component.handleInput?.(input);
 					} catch (error) {
 						clearTimeout(timeout);
@@ -105,6 +124,7 @@ function createAgentViewHarness(input: string): {
 	return {
 		open: () => showAgentView(context as unknown as ExtensionContext, client as unknown as SupervisorClient, options),
 		getEditorText: () => editorText,
+		getScreens: () => screens,
 	};
 }
 
@@ -149,6 +169,16 @@ describe("Agents workspace commands", () => {
 		expect(shouldExitAgentHost(true, { type: "prefill", text: "/" })).toBe(false);
 		expect(shouldExitAgentHost(true, { type: "close" })).toBe(true);
 		expect(shouldExitAgentHost(false, { type: "close" })).toBe(false);
+	});
+
+	it("shows the configured color shortcut in the footer and help menu", async () => {
+		const harness = createAgentViewHarness("?", true);
+		await harness.open();
+
+		const screens = harness.getScreens();
+		expect(screens?.list).toContain("Alt+C color");
+		expect(screens?.afterInput).toContain("Alt+C");
+		expect(screens?.afterInput).toContain("Set or clear color label");
 	});
 });
 

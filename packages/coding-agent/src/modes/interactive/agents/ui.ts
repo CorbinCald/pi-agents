@@ -12,6 +12,7 @@ import { DailyCostTracker, formatDailyCost } from "../../../core/daily-cost.ts";
 import type { ExtensionContext } from "../../../core/extensions/types.ts";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
 import { DynamicBorder } from "../components/dynamic-border.ts";
+import { formatKeyText } from "../components/keybinding-hints.ts";
 import { getSelectListTheme, type Theme } from "../theme/theme.ts";
 import type { SupervisorClient } from "./client.ts";
 import { isPlainCtrlC } from "./exit.ts";
@@ -670,6 +671,10 @@ class AgentViewComponent implements Component, Focusable {
 		);
 	}
 
+	private keybindingLabel(keybinding: AppKeybinding): string {
+		return formatKeyText(this.keybindings.getKeys(keybinding).join("/"), { capitalize: true });
+	}
+
 	private listFooter(): string {
 		if (this.error) return `Error: ${this.error}`;
 		if (this.busy) return "Working…";
@@ -679,10 +684,11 @@ class AgentViewComponent implements Component, Focusable {
 				? "Ctrl+X again deletes the session, branch, and worktree changes"
 				: "Ctrl+X again deletes the session";
 		}
-		return "↑↓ select · → attach · C color · Ctrl+T pin · Ctrl+R rename · Ctrl+X stop/delete";
+		return `↑↓ select · → attach · ${this.keybindingLabel("app.agents.color")} color · Ctrl+T pin · Ctrl+R rename · Ctrl+X stop/delete`;
 	}
 
 	private renderHelp(width: number): string[] {
+		const colorKey = this.keybindingLabel("app.agents.color");
 		const lines = [
 			this.borderLine(width),
 			` ${this.theme.bold(this.theme.fg("accent", "Agents shortcuts"))}`,
@@ -690,7 +696,7 @@ class AgentViewComponent implements Component, Focusable {
 			" ↑ / ↓             Select a session",
 			" Enter / →         Open the selected native Pi session",
 			" Alt+1 … Alt+9     Open session 1–9",
-			" C                 Set or clear color label",
+			` ${colorKey.padEnd(18)}Set or clear color label`,
 			" Ctrl+T            Pin or unpin",
 			" Ctrl+R            Rename",
 			" Shift+↑ / ↓       Reorder within a category",
